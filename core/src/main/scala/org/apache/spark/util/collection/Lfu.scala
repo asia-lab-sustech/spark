@@ -36,7 +36,7 @@ class LfuCache[KeyType, ItemType] extends mutable.Iterable[LfuItem[KeyType, Item
   def remove(key: KeyType): ItemType = {
     val temp = this.byKey(key)
     if (temp == null) {
-      throw new Exception("no such item")
+      return temp.data
     }
     val thisRoot = temp.parent
     this.removeNode(thisRoot)
@@ -94,7 +94,7 @@ class LfuCache[KeyType, ItemType] extends mutable.Iterable[LfuItem[KeyType, Item
 
   def getLfuItem(): Some[LfuItem[KeyType, ItemType]] = {
     if (this.byKey.isEmpty) {
-      throw new Exception("The set is empty")
+      Some(None)
     }
     Some(this.byKey(this.frequencyHead.nextNode.items.head.key))
   }
