@@ -46,7 +46,7 @@ class LfuCache[KeyType, ItemType] extends mutable.Iterable[LfuItem[KeyType, Item
   def get(key: KeyType): ItemType = {
     val tmp = this.byKey(key)
     if (tmp == null) {
-      throw new Exception("No such key")
+      return tmp.data
     }
 
     val freq = tmp.parent
