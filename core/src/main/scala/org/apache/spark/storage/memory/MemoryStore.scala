@@ -388,7 +388,9 @@ private[spark] class MemoryStore(
 
   def remove(blockId: BlockId): Boolean = memoryManager.synchronized {
     val entry = entries.synchronized {
-      entries.remove(blockId)
+      entries.remove(blockId) match {
+        case
+      }
     }
     if (entry != null) {
       entry match {

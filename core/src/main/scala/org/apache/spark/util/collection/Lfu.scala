@@ -22,8 +22,16 @@ import scala.collection.mutable
 
 class LfuCache[KeyType, ItemType] extends mutable.Iterable[LfuItem[KeyType, ItemType]] {
 
+  val theMap: mutable.HashMap[KeyType, LfuItem[KeyType, ItemType]] = mutable.HashMap[KeyType, LfuItem[KeyType, ItemType]]
 
-  private val byKey: mutable.HashMap[KeyType, LfuItem[KeyType, ItemType]] = mutable.HashMap[KeyType, LfuItem[KeyType, ItemType]]()
+  private def byKey(key: KeyType): Option[LfuItem[KeyType, ItemType]]= {
+    theMap(key) match {
+      case  item: LfuItem[KeyType, ItemType] => Some(item)
+      case _ => None
+    }
+  }
+
+  //private val byKey: mutable.HashMap[KeyType, LfuItem[KeyType, ItemType]] = mutable.HashMap[KeyType, LfuItem[KeyType, ItemType]]()
   val frequencyHead: FrequencyNode[KeyType, ItemType] = FrequencyNode(-1)
 
   def removeNode(node: FrequencyNode[KeyType, ItemType]): Unit = {
@@ -33,70 +41,71 @@ class LfuCache[KeyType, ItemType] extends mutable.Iterable[LfuItem[KeyType, Item
     node.prev = null
   }
 
-  def remove(key: KeyType): ItemType = {
+  def remove(key: KeyType): Option[ItemType] = {
     val temp = this.byKey(key)
-    if (temp == null) {
-      return temp.data
+    temp match {
+      case Some(x) =>
+        val thisRoot = x.parent
+        this.removeNode(thisRoot)
+        Some(this.theMap.remove(key).get.data)
+      case _ => None
     }
-    val thisRoot = temp.parent
-    this.removeNode(thisRoot)
-    this.byKey.remove(key).get.data
   }
 
-  def get(key: KeyType): ItemType = {
+  def get(key: KeyType): Option[ItemType] = {
     val tmp = this.byKey(key)
-    if (tmp == null) {
-      return tmp.data
+    tmp match {
+      case Some(x) =>
+        val freq = x.parent
+        var nextFreq = freq.nextNode
+        if ((nextFreq == this.frequencyHead || nextFreq.value != (freq.value + 1))) {
+          nextFreq = LfuCache.getNewNode(freq, nextFreq, freq.value + 1)
+        }
+        nextFreq.items += x
+        x.parent = nextFreq
+
+        nextFreq.prev.items -= nextFreq.prev.items.filter(freq => freq.key == key).head
+        if (nextFreq.prev.items.isEmpty) {
+          this.removeNode(freq)
+        }
+        Some(x.data)
+      case _ =>
+        None
     }
-
-    val freq = tmp.parent
-    var nextFreq = freq.nextNode
-
-    if ((nextFreq == this.frequencyHead) || nextFreq.value != (freq.value + 1)) {
-      nextFreq = LfuCache.getNewNode(freq, nextFreq, freq.value + 1)
-    }
-
-    nextFreq.items += this.byKey(key)
-    tmp.parent = nextFreq
-
-    nextFreq.prev.items -= nextFreq.prev.items.filter(freq => freq.key == key).head
-    if (nextFreq.prev.items.isEmpty) {
-      this.removeNode(freq)
-    }
-    tmp.data
   }
 
   def put(key: KeyType, value : ItemType) = {
-    if (this.byKey.contains(key)) {
-      throw new Exception("Key already exists")
-    }
-
-    val freqNode = this.frequencyHead.nextNode
-    if (freqNode.value != 1){
-      this.frequencyHead.nextNode = LfuCache.getNewNode(this.frequencyHead, freqNode)
-      this.byKey(key) = LfuItem[KeyType, ItemType](this.frequencyHead.nextNode, value, key)
-      this.frequencyHead.nextNode.items += this.byKey(key)
-    }else{
-      this.byKey(key) = LfuItem(freqNode, value, key)
-      freqNode.items += this.byKey(key)
+    if (this.theMap.contains(key)) {
+      // throw new Exception("Key already exists")
+      theMap(key) = LfuItem[KeyType, ItemType](this.theMap(key).parent, value, this.theMap(key).getKey)
+    } else {
+      val freqNode = this.frequencyHead.nextNode
+      if (freqNode.value != 1){
+        this.frequencyHead.nextNode = LfuCache.getNewNode(this.frequencyHead, freqNode)
+        this.theMap(key) = LfuItem[KeyType, ItemType](this.frequencyHead.nextNode, value, key)
+        this.frequencyHead.nextNode.items += this.theMap(key)
+      }else{
+        this.theMap(key) = LfuItem(freqNode, value, key)
+        freqNode.items += this.theMap(key)
+      }
     }
   }
 
   def containsKey(key: KeyType): Boolean = {
-    byKey contains  key
+    theMap contains  key
   }
 
 
   def clear(): Unit = {
-    byKey.clear()
+    theMap.clear()
   }
 
 
   def getLfuItem(): Option[LfuItem[KeyType, ItemType]] = {
-    if (this.byKey.isEmpty) {
+    if (this.theMap.isEmpty) {
       Some(None)
     }
-    Some(this.byKey(this.frequencyHead.nextNode.items.head.key))
+    this.byKey(this.frequencyHead.nextNode.items.head.key)
   }
 
   override def iterator: Iterator[LfuItem[KeyType, ItemType]] = new Iterator[LfuItem[KeyType, ItemType]]{
