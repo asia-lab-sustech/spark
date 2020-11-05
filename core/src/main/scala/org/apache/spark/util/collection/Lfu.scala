@@ -92,7 +92,7 @@ class LfuCache[KeyType, ItemType] extends mutable.Iterable[LfuItem[KeyType, Item
   }
 
 
-  def getLfuItem(): Some[LfuItem[KeyType, ItemType]] = {
+  def getLfuItem(): Option[LfuItem[KeyType, ItemType]] = {
     if (this.byKey.isEmpty) {
       Some(None)
     }
