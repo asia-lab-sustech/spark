@@ -22,11 +22,11 @@ import scala.collection.mutable
 
 class LfuCache[KeyType, ItemType] extends mutable.Iterable[LfuItem[KeyType, ItemType]] {
 
-  val theMap: mutable.HashMap[KeyType, LfuItem[KeyType, ItemType]] = mutable.HashMap[KeyType, LfuItem[KeyType, ItemType]]
+  val theMap: mutable.HashMap[KeyType, LfuItem[KeyType, ItemType]] = new mutable.HashMap[KeyType, LfuItem[KeyType, ItemType]]
 
   private def byKey(key: KeyType): Option[LfuItem[KeyType, ItemType]]= {
-    theMap(key) match {
-      case  item: LfuItem[KeyType, ItemType] => Some(item)
+    theMap.get(key) match {
+      case item: LfuItem[KeyType, ItemType] => Some(item)
       case _ => None
     }
   }
@@ -118,6 +118,7 @@ class LfuCache[KeyType, ItemType] extends mutable.Iterable[LfuItem[KeyType, Item
     def next: LfuItem[KeyType, ItemType] = {
       getLfuItem() match {
         case Some(x) => x
+        case _ => null
       }
     }
   }
