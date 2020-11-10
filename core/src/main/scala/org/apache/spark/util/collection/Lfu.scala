@@ -26,19 +26,25 @@ class LfuCache[KeyType, ItemType] extends mutable.Iterable[LfuItem[KeyType, Item
 
   private def byKey(key: KeyType): Option[LfuItem[KeyType, ItemType]]= {
     theMap.get(key) match {
-      case item: LfuItem[KeyType, ItemType] => Some(item)
+      case Some(item) => Some(item)
       case _ => None
     }
   }
 
   //private val byKey: mutable.HashMap[KeyType, LfuItem[KeyType, ItemType]] = mutable.HashMap[KeyType, LfuItem[KeyType, ItemType]]()
   val frequencyHead: FrequencyNode[KeyType, ItemType] = FrequencyNode(-1)
-
+  // TODO: Nullpointer Exception
   def removeNode(node: FrequencyNode[KeyType, ItemType]): Unit = {
-    node.prev.nextNode = node.nextNode
-    node.nextNode.prev = node.prev
-    node.nextNode = null
-    node.prev = null
+    if (node.nextNode != null) {
+      node.prev.nextNode = node.nextNode
+      node.nextNode.prev = node.prev
+      node.nextNode = null
+      node.prev = null
+    } else if (node.nextNode == null) {
+      node.prev.nextNode = null
+      node.nextNode = null
+      node.prev = null
+    }
   }
 
   def remove(key: KeyType): Option[ItemType] = {
@@ -46,7 +52,10 @@ class LfuCache[KeyType, ItemType] extends mutable.Iterable[LfuItem[KeyType, Item
     temp match {
       case Some(x) =>
         val thisRoot = x.parent
-        this.removeNode(thisRoot)
+        thisRoot.items -= x
+        if (thisRoot.items.isEmpty) {
+          this.removeNode(thisRoot)
+        }
         Some(this.theMap.remove(key).get.data)
       case _ => None
     }
@@ -58,7 +67,8 @@ class LfuCache[KeyType, ItemType] extends mutable.Iterable[LfuItem[KeyType, Item
       case Some(x) =>
         val freq = x.parent
         var nextFreq = freq.nextNode
-        if ((nextFreq == this.frequencyHead || nextFreq.value != (freq.value + 1))) {
+        // TODO: Nullpointer Exception
+        if ((nextFreq == this.frequencyHead || nextFreq == null || nextFreq.value != (freq.value + 1))) {
           nextFreq = LfuCache.getNewNode(freq, nextFreq, freq.value + 1)
         }
         nextFreq.items += x
@@ -105,7 +115,11 @@ class LfuCache[KeyType, ItemType] extends mutable.Iterable[LfuItem[KeyType, Item
     if (this.theMap.isEmpty) {
       Some(None)
     }
-    this.byKey(this.frequencyHead.nextNode.items.head.key)
+    try {
+      this.byKey(this.frequencyHead.nextNode.items.head.key)
+    } catch {
+      case e: java.util.NoSuchElementException => None
+    }
   }
 
   override def iterator: Iterator[LfuItem[KeyType, ItemType]] = new Iterator[LfuItem[KeyType, ItemType]]{
@@ -130,13 +144,13 @@ case class LfuItem[KeyType, ItemType](var parent: FrequencyNode[KeyType, ItemTyp
 }
 
 case class FrequencyNode[KeyType, ItemType](value: Int = 1) extends mutable.Iterable[FrequencyNode[KeyType, ItemType]] {
-  val items: mutable.ArrayBuffer[LfuItem[KeyType, ItemType]] = mutable.ArrayBuffer[LfuItem[KeyType, ItemType]] ()
+  var items: mutable.ArrayBuffer[LfuItem[KeyType, ItemType]] = mutable.ArrayBuffer[LfuItem[KeyType, ItemType]] ()
   var prev: FrequencyNode[KeyType, ItemType] = this
   var nextNode: FrequencyNode[KeyType, ItemType] = this
 
   override def iterator: Iterator[FrequencyNode[KeyType, ItemType]] = new Iterator[FrequencyNode[KeyType, ItemType]] {
     def hasNext: Boolean = nextNode != null
-    def next: FrequencyNode[KeyType, ItemType] = nextNode
+    def next(): FrequencyNode[KeyType, ItemType] = nextNode
   }
 
 }
