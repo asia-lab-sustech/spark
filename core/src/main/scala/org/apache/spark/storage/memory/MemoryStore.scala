@@ -362,7 +362,10 @@ private[spark] class MemoryStore(
   }
 
   def getBytes(blockId: BlockId): Option[ChunkedByteBuffer] = {
-    val entry = entries.synchronized { entries.get(blockId) }
+    val entry = entries.synchronized { entries.get(blockId) match {
+      case None => null
+      case Some(x) => x
+    }}
     entry match {
       case null => None
       case e: DeserializedMemoryEntry[_] =>
@@ -372,7 +375,11 @@ private[spark] class MemoryStore(
   }
 
   def getValues(blockId: BlockId): Option[Iterator[_]] = {
-    val entry = entries.synchronized { entries.get(blockId) }
+
+    val entry = entries.synchronized { entries.get(blockId) match {
+      case None => null
+      case Some(x) => x
+    }}
     entry match {
       case null => None
       case e: SerializedMemoryEntry[_] =>
@@ -385,7 +392,10 @@ private[spark] class MemoryStore(
 
   def remove(blockId: BlockId): Boolean = memoryManager.synchronized {
     val entry = entries.synchronized {
-      entries.remove(blockId)
+      entries.remove(blockId) match {
+        case Some(x) => x
+        case _ => null
+      }
     }
     if (entry != null) {
       entry match {
@@ -488,7 +498,10 @@ private[spark] class MemoryStore(
           (0 until selectedBlocks.size).foreach { idx =>
             val blockId = selectedBlocks(idx)
             val entry = entries.synchronized {
-              entries.get(blockId)
+              entries.get(blockId) match {
+                case Some(x) => x
+                case _ => null
+              }
             }
             // This should never be null as only one task should be dropping
             // blocks and removing entries. However the check is still here for
