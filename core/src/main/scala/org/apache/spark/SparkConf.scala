@@ -450,6 +450,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
    * from the start in the Executor.
    */
   def getAppId: String = get("spark.app.id")
+  def getAppName: String = get("spark.app.name")
 
   /** Does the configuration contain a given parameter? */
   def contains(key: String): Boolean = {
@@ -627,6 +628,7 @@ class SparkConf(loadDefaults: Boolean) extends Cloneable with Logging with Seria
   def toDebugString: String = {
     Utils.redact(this, getAll).sorted.map { case (k, v) => k + "=" + v }.mkString("\n")
   }
+
 
 }
 

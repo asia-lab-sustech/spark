@@ -75,6 +75,18 @@ class BlockManagerSlaveEndpoint(
     case TriggerThreadDump =>
       context.reply(Utils.getThreadDump())
 
+    case BroadcastJobDAG(jobId, jobDAG) => // yyh
+      // In the future, profile the JobDAG
+      val (currentRefMap, refMap) = blockManager.updateRefProfile(jobId, jobDAG)
+      // return the updated ref map
+      context.reply((currentRefMap, refMap))
+
+    case CheckPeersConservatively(blockId) => // yyh for all-or-nothing
+      blockManager.memoryStore.checkPeersConservatively(blockId)
+
+    case CheckPeersStrictly(blockId) => // yyh for all-or-nothing
+      blockManager.memoryStore.checkPeersStrictly(blockId)
+
     case ReplicateBlock(blockId, replicas, maxReplicas) =>
       context.reply(blockManager.replicateBlock(blockId, replicas.toSet, maxReplicas))
 

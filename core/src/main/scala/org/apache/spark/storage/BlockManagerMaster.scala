@@ -17,15 +17,17 @@
 
 package org.apache.spark.storage
 
-import scala.collection.Iterable
+import scala.collection.{Iterable, mutable}
 import scala.collection.generic.CanBuildFrom
 import scala.concurrent.Future
-
 import org.apache.spark.{SparkConf, SparkException}
 import org.apache.spark.internal.Logging
 import org.apache.spark.rpc.RpcEndpointRef
-import org.apache.spark.storage.BlockManagerMessages._
+import org.apache.spark.storage.BlockManagerMessages.{BlockWithPeerEvicted, GetRefProfile, ReportCacheHit, StartBroadcastRefCount, _}
 import org.apache.spark.util.{RpcUtils, ThreadUtils}
+
+import scala.collection.immutable.List
+import scala.collection.mutable.HashMap
 
 private[spark]
 class BlockManagerMaster(
@@ -33,6 +35,11 @@ class BlockManagerMaster(
     conf: SparkConf,
     isDriver: Boolean)
   extends Logging {
+
+  def broadcastRefCount(jobId: Int, numberOfRDDPartitions: Int, refCount: mutable.HashMap[Int, Int]) = {
+    tell(StartBroadcastRefCount(jobId, numberOfRDDPartitions, refCount))
+  }
+
 
   val timeout = RpcUtils.askRpcTimeout(conf)
 
@@ -118,18 +125,21 @@ class BlockManagerMaster(
    * blocks that the driver knows about.
    */
   def removeBlock(blockId: BlockId) {
-    driverEndpoint.askSync[Boolean](RemoveBlock(blockId))
+//    driverEndpoint.askSync[Boolean](RemoveBlock(blockId))
+    if (!blockId.isRDD) {  // yyh: the rdd blocks can only be removed by memory store itself
+      driverEndpoint.askSync[Boolean](RemoveBlock(blockId))
+    }
   }
 
   /** Remove all blocks belonging to the given RDD. */
   def removeRdd(rddId: Int, blocking: Boolean) {
-    val future = driverEndpoint.askSync[Future[Seq[Int]]](RemoveRdd(rddId))
-    future.failed.foreach(e =>
-      logWarning(s"Failed to remove RDD $rddId - ${e.getMessage}", e)
-    )(ThreadUtils.sameThread)
-    if (blocking) {
-      timeout.awaitResult(future)
-    }
+//    val future = driverEndpoint.askSync[Future[Seq[Int]]](RemoveRdd(rddId))
+//    future.failed.foreach(e =>
+//      logWarning(s"Failed to remove RDD $rddId - ${e.getMessage}", e)
+//    )(ThreadUtils.sameThread)
+//    if (blocking) {
+//      timeout.awaitResult(future)
+//    }
   }
 
   /** Remove all blocks belonging to the given shuffle. */
@@ -145,15 +155,15 @@ class BlockManagerMaster(
 
   /** Remove all blocks belonging to the given broadcast. */
   def removeBroadcast(broadcastId: Long, removeFromMaster: Boolean, blocking: Boolean) {
-    val future = driverEndpoint.askSync[Future[Seq[Int]]](
-      RemoveBroadcast(broadcastId, removeFromMaster))
-    future.failed.foreach(e =>
-      logWarning(s"Failed to remove broadcast $broadcastId" +
-        s" with removeFromMaster = $removeFromMaster - ${e.getMessage}", e)
-    )(ThreadUtils.sameThread)
-    if (blocking) {
-      timeout.awaitResult(future)
-    }
+//    val future = driverEndpoint.askSync[Future[Seq[Int]]](
+//      RemoveBroadcast(broadcastId, removeFromMaster))
+//    future.failed.foreach(e =>
+//      logWarning(s"Failed to remove broadcast $broadcastId" +
+//        s" with removeFromMaster = $removeFromMaster - ${e.getMessage}", e)
+//    )(ThreadUtils.sameThread)
+//    if (blocking) {
+//      timeout.awaitResult(future)
+//    }
   }
 
   /**
@@ -230,6 +240,46 @@ class BlockManagerMaster(
     driverEndpoint.askSync[Boolean](HasCachedBlocks(executorId))
   }
 
+  /**
+   * yyh, report to the driver the hit and miss count on this blockmanager
+   */
+  def reportCacheHit(blockManagerId: BlockManagerId, list: List[Int],
+                     hitBlockList: mutable.MutableList[BlockId]): Boolean = {
+    driverEndpoint.askSync[Boolean](ReportCacheHit(blockManagerId, list, hitBlockList))
+  }
+
+  /**
+   * yyh, get the refProfile from the driver, including appDAG, jobDAGs and peer information
+   */
+  def getRefProfile(blockManagerId: BlockManagerId, slaveEndPoint: RpcEndpointRef):
+  (mutable.HashMap[Int, Int], mutable.HashMap[Int, mutable.HashMap[Int, Int]],
+    mutable.HashMap[Int, Int]) = {
+    logInfo(s"yyh: $blockManagerId try to get refprofile from the master endpoint")
+    driverEndpoint.askSync[(mutable.HashMap[Int, Int], mutable.HashMap[Int,
+      mutable.HashMap[Int, Int]], mutable.HashMap[Int, Int])](GetRefProfile
+    (blockManagerId, slaveEndPoint))
+  }
+
+  /**
+   * yyh report the current ref map to the driver. For debug
+   */
+  // def reportRefMap(blockManagerId: BlockManagerId, refMap: mutable.Map[BlockId, Int]): Unit = {
+  //  driverEndpoint.askWithRetry[Boolean](ReportRefMap(blockManagerId, refMap))
+  // }
+
+  /**
+   * yyh, for all-or-nothing
+   * If a block with peer is evicted, tell the master
+   */
+  /**
+   * yyh, get the refProfile from the driver, including appDAG, jobDAGs and peer information
+   */
+  def reportBlockEviction(blockId: BlockId): Unit = {
+    logInfo(s"yyh: $blockId is evicted, tell the master as it has a peer")
+    driverEndpoint.askSync[Boolean](BlockWithPeerEvicted(blockId))
+  }
+
+
   /** Stop the driver endpoint, called only on the Spark driver node */
   def stop() {
     if (driverEndpoint != null && isDriver) {
@@ -238,6 +288,18 @@ class BlockManagerMaster(
       logInfo("BlockManagerMaster stopped")
     }
   }
+
+  /** Broadcast the JobId */
+  def broadcastJobId(jobId: Int): Unit = {
+    tell(StartBroadcastJobId(jobId))
+  }
+
+//  /** Broadcast reference count */
+//  def broadcastRefCount(jobId: Int, numberOfRDDPartitions: Int,
+//                        refCount: HashMap[Int, Int]): Unit = {
+//    tell(StartBroadcastRefCount(jobId, numberOfRDDPartitions, refCount))
+//  }
+
 
   /** Send a one-way message to the master endpoint, to which we expect it to reply with true. */
   private def tell(message: Any) {

@@ -20,9 +20,12 @@ package org.apache.spark.rdd
 import java.io.{IOException, ObjectOutputStream}
 
 import scala.reflect.ClassTag
-
 import org.apache.spark.{OneToOneDependency, Partition, SparkContext, TaskContext}
 import org.apache.spark.util.Utils
+
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.{Await, Future}
+import scala.concurrent.duration.Duration
 
 private[spark] class ZippedPartitionsPartition(
     idx: Int,
@@ -86,7 +89,15 @@ private[spark] class ZippedPartitionsRDD2[A: ClassTag, B: ClassTag, V: ClassTag]
 
   override def compute(s: Partition, context: TaskContext): Iterator[V] = {
     val partitions = s.asInstanceOf[ZippedPartitionsPartition].partitions
-    f(rdd1.iterator(partitions(0), context), rdd2.iterator(partitions(1), context))
+//    f(rdd1.iterator(partitions(0), context), rdd2.iterator(partitions(1), context))
+    val iter1 = Future {rdd1.iterator(partitions(0), context)} // yyh read partitions concurrently
+    val iter2 = Future {rdd2.iterator(partitions(1), context)}
+    val result = for {
+      r1 <- iter1
+      r2 <- iter2
+    } yield (f(r1, r2))
+    logInfo(s"yyh: Wait for zip read")
+    Await.result(result, Duration.Inf)
   }
 
   override def clearDependencies() {

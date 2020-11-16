@@ -17,19 +17,17 @@
 
 package org.apache.spark.storage.memory
 
-import java.io.OutputStream
+import java.io.{File, FileWriter, OutputStream}
 import java.nio.ByteBuffer
 import java.util.LinkedHashMap
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.reflect.ClassTag
-
 import com.google.common.io.ByteStreams
-
 import org.apache.spark.{SparkConf, TaskContext}
 import org.apache.spark.internal.Logging
-import org.apache.spark.internal.config.{UNROLL_MEMORY_CHECK_PERIOD, UNROLL_MEMORY_GROWTH_FACTOR}
+import org.apache.spark.internal.config.{LISTENER_BUS_METRICS_MAX_LISTENER_CLASSES_TIMED, UNROLL_MEMORY_CHECK_PERIOD, UNROLL_MEMORY_GROWTH_FACTOR}
 import org.apache.spark.memory.{MemoryManager, MemoryMode}
 import org.apache.spark.serializer.{SerializationStream, SerializerManager}
 import org.apache.spark.storage._
@@ -38,6 +36,9 @@ import org.apache.spark.unsafe.array.ByteArrayMethods
 import org.apache.spark.util.{SizeEstimator, Utils}
 import org.apache.spark.util.collection.SizeTrackingVector
 import org.apache.spark.util.io.{ChunkedByteBuffer, ChunkedByteBufferOutputStream}
+
+import scala.collection.immutable.ListMap
+import scala.util.control.Breaks.{break, breakable}
 
 private sealed trait MemoryEntry[T] {
   def size: Long
@@ -80,11 +81,150 @@ private[storage] trait BlockEvictionHandler {
  */
 private[spark] class MemoryStore(
     conf: SparkConf,
-    blockInfoManager: BlockInfoManager,
+    blockManager: BlockManager,
     serializerManager: SerializerManager,
     memoryManager: MemoryManager,
     blockEvictionHandler: BlockEvictionHandler)
   extends Logging {
+
+
+
+  var refMap = mutable.HashMap[BlockId, Int]()  // LRC no recency. remaining refCount of
+  // all blocks in cache and disk
+  var currentRefMap = mutable.HashMap[BlockId, Int]() // remaining refCount of blocks in cache
+  val stickyLog = new FileWriter(new File("stickyLog.txt"))
+
+  def deductRefCountByBlockIdHit(blockId: BlockId): Unit = {
+    blockManager.hitRDDBlocks.synchronized (blockManager.hitRDDBlocks += blockId)
+    refMap.synchronized{
+      if (refMap.getOrElse(blockId, 0) > 0) {
+        refMap(blockId) -= 1
+        val newRefCount = refMap(blockId)
+        logInfo(s"yyh: ref count of $blockId is deducted to $newRefCount")
+      }
+    }
+    currentRefMap.synchronized{
+      if (currentRefMap.getOrElse(blockId, 0) > 0) {
+        currentRefMap(blockId) -= 1
+      }
+    }
+  }
+  def checkPeersConservatively(blockId: BlockId): Unit = refMap.synchronized {
+    refMap.synchronized {
+      // the refcount of itself should be zero. Here we do not consider re-admission
+      if (refMap.contains(blockId)) {
+        print(blockId)
+        // refMap(blockId) -= 1
+        // stickyLog.write(s"Conservative: Refcount of $blockId is decreased by 1\n")
+        // logInfo(s"yyh: ref count of $blockId is deducted to ${refMap(blockId)}" +
+        //   s" because of conservative all-or-nothing")
+        // This block must have been generated somewhere,
+        // so no need to record it in the peerLostBlocks
+      }
+    }
+    currentRefMap.synchronized{
+      if (currentRefMap.contains(blockId)){
+        print(blockId)
+        //  currentRefMap(blockId) -= 1
+
+      }
+    }
+
+    val rddId = blockId.asRDDId.toString.split("_")(1).toInt // rdd_1_1
+    val index = blockId.asRDDId.toString.split("_")(2).stripSuffix(")").toInt
+    if (blockManager.peers.contains(rddId))
+    {
+      val peerRDDId = blockManager.peers.get(rddId).get
+      val peerBlockId = new RDDBlockId(peerRDDId, index)
+      refMap.synchronized {
+        if (refMap.contains(peerBlockId)) {
+          print(peerBlockId)
+          // refMap(peerBlockId) -= 1
+          // stickyLog.write(s"Conservative: Refcount of $peerBlockId is decreased by 1\n")
+          // logInfo(s"yyh: ref count of $peerBlockId is deducted to ${refMap(peerBlockId)} " +
+          // s"because of conservative all-or-nothing")
+
+        }
+        else {
+          //  blockManager.peerLostBlocks.synchronized {blockManager.peerLostBlocks += peerBlockId}
+          // stickyLog.write(s"Conservative: $peerBlockId is added to peerLostBlocks\n")
+          // The peer block is not in the worker, record it in case it is cached in the future
+          // logInfo(s"yyh: $peerBlockId is added to the peerLostBlocks: ")
+        }
+      }
+      currentRefMap.synchronized {
+        if (currentRefMap.contains(peerBlockId)) {
+          print(peerBlockId)
+          // currentRefMap(peerBlockId) -= 1
+        }
+      }
+    }
+  }
+
+
+  def decreaseRDDRefCount(rddId: Int): Unit = {
+    blockManager.refProfile.synchronized {
+      if (blockManager.refProfile.getOrElse(rddId, 0) > 0){
+        blockManager.refProfile(rddId) -= 1
+        stickyLog.write(s"Strict: Refcount of RDD $rddId is decreased by 1 in refProfile\n")
+        logInfo(s"yyh: the ref count of $rddId in blockManager's refProfile is deducted " +
+          s"to ${blockManager.refProfile(rddId)} due to strict all-or-nothing")
+      }
+    }
+    blockManager.refProfile_online.synchronized {
+      if (blockManager.refProfile_online.getOrElse(rddId, 0) > 0) {
+        blockManager.refProfile_online(rddId) -= 1
+        stickyLog.write(s"Strict: Refcount of RDD $rddId is decreased by 1 in refProfile_online\n")
+        logInfo(s"yyh: the ref count of $rddId in blockManager's refProfile_online is deducted " +
+          s"to ${blockManager.refProfile(rddId)} due to strict all-or-nothing")
+      }
+    }
+    refMap.synchronized {
+      refMap.foreach{ case (key: BlockId, value: Int) =>
+        if (key.asRDDId.toString.split("_")(1).toInt == rddId && value > 0) {
+
+          logInfo(s"yyh: ref count of $key id is deducted to ${value-1}" +
+            s"because of strict all-or-nothing")
+          refMap(key) = value-1
+        }
+      }
+    }
+    currentRefMap.synchronized{
+      currentRefMap.foreach{ case (key: BlockId, value: Int) =>
+        if (key.asRDDId.toString.split("_")(1).toInt == rddId && value > 0) {
+          stickyLog.write(s"Strict: Refcount of $key is decreased to ${value-1} in the cache\n")
+          logInfo(s"yyh: ref count of $key id is deducted to ${value-1}" +
+            s"because of strict all-or-nothing")
+          currentRefMap(key) = value-1
+        }
+      }
+    }
+  }
+
+  /**
+   * yyh for strict all-or-nothing
+   * decrease the ref count of peers on eviction of the given block
+   * This is only triggered by the message from the driver
+   * what if the peer blocks have not yet been generated ?
+   * Notify the blockManager to edit its refProfile
+   */
+  def checkPeersStrictly(blockId: BlockId): Unit = refMap.synchronized {
+    val rddId = blockId.asRDDId.toString.split("_")(1).toInt
+    decreaseRDDRefCount(rddId)
+    val peerRDDId = blockManager.peers.get(rddId)
+    if (peerRDDId.isDefined) {
+      decreaseRDDRefCount(peerRDDId.get)
+    }
+  }
+  def deductRefCountByBlockIdMiss(blockId: BlockId): Unit = {
+    refMap.synchronized{
+      if (refMap.getOrElseUpdate(blockId, 0) > 0) {
+        refMap(blockId) -= 1
+        val newRefCount = refMap(blockId)
+        logInfo(s"LRC: ref count of $blockId is deducted to $newRefCount")
+      }
+    }
+  }
 
   // Note: all changes to memory allocations, notably putting blocks, evicting blocks, and
   // acquiring or releasing unroll memory, must be synchronized on `memoryManager`!
@@ -206,9 +346,61 @@ private[spark] class MemoryStore(
     // Keep track of unroll memory used by this particular block / putIterator() operation
     var unrollMemoryUsedByThisBlock = 0L
 
+    if (blockId.isRDD) { // we only care about the ref count of rdd blocks
+      val rddId = blockId.asRDDId.toString.split("_")(1).toInt // yyh asRDDId: rdd_1_1
+      if (refMap.contains(blockId)){
+        logError(s"LRC: the to unrolled block is already in the ref map")
+      }
+      else if (blockManager.refProfile_online.contains(rddId)) {   // jobDAG
+        val ref_count = blockManager.refProfile_online(rddId)
+        refMap.synchronized { refMap(blockId) = ref_count}
+        logInfo(s"LRC: (Unrolling) fetch the ref count of $blockId: $ref_count")
+      }
+      else if (blockManager.peerLostBlocks.contains(blockId)) {
+        refMap.synchronized {
+          refMap.put(blockId, 0)
+        }
+        logInfo(s"LRC: the unrolled block $blockId is not in the ref profile, and its peer is lost")
+      }
+      else
+      {
+        refMap.synchronized {
+          refMap.put(blockId, 1)
+        }
+        logInfo(s"LRC: the unrolled block $blockId is not in the ref profile")
+      }
+    }
+
+
     // Request enough memory to begin unrolling
     keepUnrolling =
       reserveUnrollMemoryForThisTask(blockId, initialMemoryThreshold, memoryMode)
+
+    // get the ref count fo the to-cache block, no matter whether it is finally cached or not
+    if (blockId.isRDD) { // we only care about the ref count of rdd blocks
+      val rddId = blockId.asRDDId.toString.split("_")(1).toInt // yyh asRDDId: rdd_1_1
+      if (refMap.contains(blockId)){
+        logInfo(s"yyh: the to be cache block is already in the ref map")
+      }
+      else if (blockManager.refProfile_online.contains(rddId)) {  // jobDAG
+        val ref_count = blockManager.refProfile_online(rddId)
+        refMap.synchronized { refMap(blockId) = ref_count}
+        logInfo(s"yyh: fetch the ref count of $blockId: $ref_count")
+      }
+      else if (blockManager.peerLostBlocks.contains(blockId)) {
+        refMap.synchronized {
+          refMap.put(blockId, 0)
+        }
+        logInfo(s"yyh: block $blockId is not in the ref profile, and its peer is lost")
+      }
+      else
+      {
+        refMap.synchronized {
+          refMap.put(blockId, 1)
+        }
+        logInfo(s"yyh: block $blockId is not in the ref profile")
+      }
+    }
 
     if (!keepUnrolling) {
       logWarning(s"Failed to reserve initial memory threshold of " +
@@ -263,6 +455,13 @@ private[spark] class MemoryStore(
         entries.synchronized {
           entries.put(blockId, entry)
         }
+        if (blockId.isRDD) {
+          currentRefMap.synchronized{
+            currentRefMap.put(blockId, refMap(blockId))
+            val ref_count = refMap(blockId)
+            logInfo(s"LRC: put $blockId in current refMap: $ref_count")
+          }
+        }
 
         logInfo("Block %s stored as values in memory (estimated size %s, free %s)".format(blockId,
           Utils.bytesToString(entry.size), Utils.bytesToString(maxMemory - blocksMemoryUsed)))
@@ -296,7 +495,7 @@ private[spark] class MemoryStore(
 
     val valuesHolder = new DeserializedValuesHolder[T](classTag)
 
-    putIterator(blockId, values, classTag, MemoryMode.ON_HEAP, valuesHolder) match {
+    putIterator(blockId, values, classTag, MemoryMode.ON_HEAP,valuesHolder) match {
       case Right(storedSize) => Right(storedSize)
       case Left(unrollMemoryUsedByThisBlock) =>
         val unrolledIterator = if (valuesHolder.vector != null) {
@@ -387,7 +586,17 @@ private[spark] class MemoryStore(
 
   def remove(blockId: BlockId): Boolean = memoryManager.synchronized {
     val entry = entries.synchronized {
-      entries.remove(blockId)
+      if (entries.containsKey(blockId)) {
+        entries.remove(blockId)
+      } else {
+        null
+      }
+    }
+    if (blockId.isRDD) {
+      currentRefMap.synchronized {
+        if (currentRefMap contains blockId)
+        currentRefMap.remove(blockId)
+      }
     }
     if (entry != null) {
       entry match {
@@ -395,7 +604,7 @@ private[spark] class MemoryStore(
         case _ =>
       }
       memoryManager.releaseStorageMemory(entry.size, entry.memoryMode)
-      logDebug(s"Block $blockId of size ${entry.size} dropped " +
+      logDebug(s"LRC: Block $blockId of size ${entry.size} dropped " +
         s"from memory (free ${maxMemory - blocksMemoryUsed})")
       true
     } else {
@@ -445,20 +654,72 @@ private[spark] class MemoryStore(
       }
       // This is synchronized to ensure that the set of entries is not changed
       // (because of getValue or getBytes) while traversing the iterator, as that
-      // can lead to exceptions.
-      entries.synchronized {
-        val iterator = entries.entrySet().iterator()
-        while (freedMemory < space && iterator.hasNext) {
-          val pair = iterator.next()
-          val blockId = pair.getKey
-          val entry = pair.getValue
-          if (blockIsEvictable(blockId, entry)) {
-            // We don't want to evict blocks which are currently being read, so we need to obtain
-            // an exclusive write lock on blocks which are candidates for eviction. We perform a
-            // non-blocking "tryLock" here in order to ignore blocks which are locked for reading:
-            if (blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
-              selectedBlocks += blockId
-              freedMemory += pair.getValue.size
+//      // can lead to exceptions.
+//      entries.synchronized {
+//        val iterator = entries.entrySet().iterator()
+//        while (freedMemory < space && iterator.hasNext) {
+//          val pair = iterator.next()
+//          val blockId = pair.getKey
+//          val entry = pair.getValue
+//          if (blockIsEvictable(blockId, entry)) {
+//            // We don't want to evict blocks which are currently being read, so we need to obtain
+//            // an exclusive write lock on blocks which are candidates for eviction. We perform a
+//            // non-blocking "tryLock" here in order to ignore blocks which are locked for reading:
+//            if (blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
+//              selectedBlocks += blockId
+//              freedMemory += pair.getValue.size
+//            }
+//          }
+//        }
+//      }
+
+      var blockToCacheRefCount = Int.MaxValue
+      if (blockId.isDefined && blockId.get.isRDD) {
+        val peerRDDId = blockManager.peers.getOrElseUpdate(rddToAdd.get, 0)
+        val index = blockId.get.asRDDId.toString.split("_")(2).stripSuffix(")").toInt
+        val peerBlockId = new RDDBlockId(peerRDDId, index)
+
+        if (refMap contains blockId.get) {
+          blockToCacheRefCount = refMap(blockId.get)
+          logInfo(s"LRC: The ref count of $blockId is $blockToCacheRefCount")
+        } else {
+          blockToCacheRefCount = 1
+          logError(s"yyh: The ref count of $blockId is not in the refMap")
+        }
+        currentRefMap.synchronized{
+          val listMap = ListMap(currentRefMap.toSeq.sortBy(_._2): _*)
+          breakable {
+            for ((thisBlockId, thisRefCount) <- listMap){
+              // conservative all-or-nothing: do not evict its peer
+              if (thisBlockId != peerBlockId && thisRefCount <= blockToCacheRefCount
+                && freedMemory < space) {
+                selectedBlocks += thisBlockId
+                entries.synchronized {
+                  freedMemory += entries.get(thisBlockId).size
+                }
+              }
+              else {
+                break
+              }
+            }
+          }
+        }
+      } else {// If the to-be-cached block is not from a block RDD cache is anyway
+        currentRefMap.synchronized {
+          // Sort all the blocks in current cache by their ref counts
+          // Only rdd blocks will be put in the currentRefMap
+          val listMap = ListMap(currentRefMap.toSeq.sortBy(_._2): _*)
+          breakable {
+            for ((thisBlockId, thisRefCount) <- listMap){
+              if (freedMemory < space) {
+                selectedBlocks += thisBlockId
+                entries.synchronized {
+                  freedMemory += entries.get(thisBlockId).size
+                }
+              }
+              else {
+                break
+              }
             }
           }
         }
@@ -474,11 +735,11 @@ private[spark] class MemoryStore(
         if (newEffectiveStorageLevel.isValid) {
           // The block is still present in at least one store, so release the lock
           // but don't delete the block info
-          blockInfoManager.unlock(blockId)
+          blockManager.blockInfoManager.unlock(blockId)
         } else {
           // The block isn't present in any store, so delete the block info so that the
           // block can be stored again
-          blockInfoManager.removeBlock(blockId)
+          blockManager.blockInfoManager.removeBlock(blockId)
         }
       }
 
@@ -511,7 +772,7 @@ private[spark] class MemoryStore(
             // the blocks we didn't process successfully are still locked, so we have to unlock them
             (lastSuccessfulBlock + 1 until selectedBlocks.size).foreach { idx =>
               val blockId = selectedBlocks(idx)
-              blockInfoManager.unlock(blockId)
+              blockManager.blockInfoManager.unlock(blockId)
             }
           }
         }
@@ -520,7 +781,7 @@ private[spark] class MemoryStore(
           logInfo(s"Will not store $id")
         }
         selectedBlocks.foreach { id =>
-          blockInfoManager.unlock(id)
+          blockManager.blockInfoManager.unlock(id)
         }
         0L
       }
@@ -549,6 +810,7 @@ private[spark] class MemoryStore(
       memory: Long,
       memoryMode: MemoryMode): Boolean = {
     memoryManager.synchronized {
+      logInfo(s"LRC: reserve unroll memory for block $blockId")
       val success = memoryManager.acquireUnrollMemory(blockId, memory, memoryMode)
       if (success) {
         val taskAttemptId = currentTaskAttemptId()
