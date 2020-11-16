@@ -591,14 +591,14 @@ private[spark] class DAGScheduler(
 
 
   private def profileRefCountStageByStage(rdd: RDD[_], jobId: Int): Unit = {
-    logWarning("zcl: profiling" + " jobId " + jobId + " rdd: " + rdd.id
+    logWarning("LRC: profiling" + " jobId " + jobId + " rdd: " + rdd.id
       + " " + rdd.getStorageLevel.useMemory)
     val refCountByJob = new HashMap[Int, Int]
     profileRefCountOneStage(rdd, jobId, refCountByJob)
     while (!waitingReStages.isEmpty) {
       profileRefCountOneStage(waitingReStages.dequeue(), jobId, refCountByJob)
     }
-    logWarning("zcl: profiling" + " jobId " + jobId + "done" + " rdd: " + rdd.id)
+    logWarning("LRC: profiling" + " jobId " + jobId + "done" + " rdd: " + rdd.id)
     val numberOfRDDPartitions = rdd.getNumPartitions
     blockManagerMaster.broadcastRefCount(jobId, numberOfRDDPartitions, refCountByJob)
     writeRefCountToFile(jobId, refCountByJob)
@@ -618,7 +618,7 @@ private[spark] class DAGScheduler(
     if (!visitedStageRDDs.contains(rdd.id)) {
       visitedStageRDDs += rdd.id
     } else {
-      logWarning("zcl: visited stage rdd: " + rdd.id + " skip")
+      logWarning("LRC: visited stage rdd: " + rdd.id + " skip")
       return
     }
     def visit(rdd: RDD[_]): Unit = {
@@ -631,20 +631,20 @@ private[spark] class DAGScheduler(
         }
       }
       for (dep <- rdd.dependencies) {
-        logWarning("zcl: processing dependency between rdd: " + rdd.id + " " + dep.rdd.id)
+        logWarning("LRC: processing dependency between rdd: " + rdd.id + " " + dep.rdd.id)
         dep match {
           case shufDep: ShuffleDependency[_, _, _] =>
             if (!expendedNodes.contains(shufDep.rdd.id)) {
               if (!waitingReStages.contains(shufDep.rdd)) {
                 waitingReStages += shufDep.rdd
-                logWarning("zcl: shuffllede between " + rdd.id +
+                logWarning("LRC: shuffllede between " + rdd.id +
                   " and " + shufDep.rdd.id + ", to the queue")
               } else {
-                logWarning("zcl: shuffllede between " + rdd.id +
+                logWarning("LRC: shuffllede between " + rdd.id +
                   " and " + shufDep.rdd.id + ", duplecated, cancel")
               }
             } else {
-              logWarning("zcl: shuffllede between " + rdd.id +
+              logWarning("LRC: shuffllede between " + rdd.id +
                 " and " + shufDep.rdd.id + " skip")
             }
           case narrowDep: NarrowDependency[_] =>
@@ -660,10 +660,10 @@ private[spark] class DAGScheduler(
               if (rddIdToRefCount.contains(narrowDep.rdd.id)) {
                 val temp = rddIdToRefCount(narrowDep.rdd.id) + 1
                 rddIdToRefCount.put(narrowDep.rdd.id, temp)
-                logWarning("zcl: RefCount for " + narrowDep.rdd.id + " is " + temp)
+                logWarning("LRC: RefCount for " + narrowDep.rdd.id + " is " + temp)
               } else {
                 rddIdToRefCount.put(narrowDep.rdd.id, 1)
-                logWarning("zcl: RefCount for " + narrowDep.rdd.id + " is 1")
+                logWarning("LRC: RefCount for " + narrowDep.rdd.id + " is 1")
               }
               if (refCountById.contains(narrowDep.rdd.id)) {
                 val temp = refCountById(narrowDep.rdd.id) + 1
@@ -686,7 +686,7 @@ private[spark] class DAGScheduler(
     // Drop 1 ref count of the in memory RDD with the biggest id
     if (newInMemoryRDDs.length > 0) {
       for (can <- newInMemoryRDDs) {
-        logWarning("zcl: droping new in stage RDD: " + can)
+        logWarning("LRC: droping new in stage RDD: " + can)
         if (refCountById.contains(can)) {
           refCountById -= can
         }
