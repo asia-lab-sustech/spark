@@ -300,9 +300,9 @@ private[storage] class BlockInfoManager extends Logging {
       info.readerCount -= 1
       val countsForTask = readLocksByTask(taskId)
       val newPinCountForTask: Int = countsForTask.remove(blockId, 1) - 1
-      assert(newPinCountForTask >= 0,
+//      assert(newPinCountForTask >= 0,
 //        s"Task $taskId release lock on block $blockId more times than it acquired it")
-    }
+//    }
     notifyAll()
   }
 
