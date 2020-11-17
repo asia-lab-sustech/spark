@@ -341,11 +341,14 @@ private[storage] class BlockInfoManager extends Logging {
    *
    * @return the ids of blocks whose pins were released
    */
-  def releaseAllLocksForTask(taskAttemptId: TaskAttemptId): Seq[BlockId] = synchronized {
+  def releaseAllLocksForTask(taskAttemptId: TaskAttemptId): Seq[BlockId] = {
     val blocksWithReleasedLocks = mutable.ArrayBuffer[BlockId]()
-
-    val readLocks = readLocksByTask.remove(taskAttemptId).getOrElse(ImmutableMultiset.of[BlockId]())
-    val writeLocks = writeLocksByTask.remove(taskAttemptId).getOrElse(Seq.empty)
+    val readLocks = synchronized {
+      readLocksByTask.remove(taskAttemptId).getOrElse(ImmutableMultiset.of[BlockId]())
+    }
+    val writeLocks = synchronized {
+      writeLocksByTask.remove(taskAttemptId).getOrElse(Seq.empty)
+    }
 
     for (blockId <- writeLocks) {
       infos.get(blockId).foreach { info =>
@@ -359,14 +362,16 @@ private[storage] class BlockInfoManager extends Logging {
       val blockId = entry.getElement
       val lockCount = entry.getCount
       blocksWithReleasedLocks += blockId
-      get(blockId).foreach { info =>
-        info.readerCount -= lockCount
-        assert(info.readerCount >= 0)
+      synchronized {
+        get(blockId).foreach { info =>
+          info.readerCount -= lockCount
+          assert(info.readerCount >= 0)
+        }
       }
     }
-
-    notifyAll()
-
+    synchronized {
+      notifyAll()
+    }
     blocksWithReleasedLocks
   }
 
