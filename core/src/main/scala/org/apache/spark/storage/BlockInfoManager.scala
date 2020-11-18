@@ -296,13 +296,13 @@ private[storage] class BlockInfoManager extends Logging {
       info.writerTask = BlockInfo.NO_WRITER
       writeLocksByTask.removeBinding(taskId, blockId)
     } else {
-//      assert(info.readerCount > 0, s"Block $blockId is not locked for reading")
+      assert(info.readerCount > 0, s"Block $blockId is not locked for reading")
       info.readerCount -= 1
       val countsForTask = readLocksByTask(taskId)
       val newPinCountForTask: Int = countsForTask.remove(blockId, 1) - 1
-//      assert(newPinCountForTask >= 0,
-//        s"Task $taskId release lock on block $blockId more times than it acquired it")
-//    }
+      assert(newPinCountForTask >= 0,
+        s"Task $taskId release lock on block $blockId more times than it acquired it")
+    }
     notifyAll()
   }
 
