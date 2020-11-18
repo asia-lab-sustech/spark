@@ -684,7 +684,7 @@ private[spark] class MemoryStore(
           logInfo(s"LRC: The ref count of $blockId is $blockToCacheRefCount")
         } else {
           blockToCacheRefCount = 1
-          logError(s"yyh: The ref count of $blockId is not in the refMap")
+          logError(s"LRC: The ref count of $blockId is not in the refMap")
         }
         currentRefMap.synchronized{
           val listMap = ListMap(currentRefMap.toSeq.sortBy(_._2): _*)
@@ -693,9 +693,11 @@ private[spark] class MemoryStore(
               // conservative all-or-nothing: do not evict its peer
               if (thisBlockId != peerBlockId && thisRefCount <= blockToCacheRefCount
                 && freedMemory < space) {
-                selectedBlocks += thisBlockId
-                entries.synchronized {
-                  freedMemory += entries.get(thisBlockId).size
+                if (blockManager.blockInfoManager.lockForWriting(blockId.get, blocking = false).isDefined) {
+                  selectedBlocks += thisBlockId
+                  entries.synchronized {
+                    freedMemory += entries.get(thisBlockId).size
+                  }
                 }
               }
               else {
@@ -712,9 +714,11 @@ private[spark] class MemoryStore(
           breakable {
             for ((thisBlockId, thisRefCount) <- listMap){
               if (freedMemory < space) {
-                selectedBlocks += thisBlockId
-                entries.synchronized {
-                  freedMemory += entries.get(thisBlockId).size
+                if (blockManager.blockInfoManager.lockForWriting(blockId.get, blocking = false).isDefined) {
+                  selectedBlocks += thisBlockId
+                  entries.synchronized {
+                    freedMemory += entries.get(thisBlockId).size
+                  }
                 }
               }
               else {
