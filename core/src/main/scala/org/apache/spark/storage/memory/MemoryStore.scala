@@ -693,7 +693,7 @@ private[spark] class MemoryStore(
               // conservative all-or-nothing: do not evict its peer
               if (thisBlockId != peerBlockId && thisRefCount <= blockToCacheRefCount
                 && freedMemory < space) {
-                if (blockManager.blockInfoManager.lockForWriting(blockId.get, blocking = false).isDefined) {
+                if (blockIsEvictable(blockId.get, entries.get(thisBlockId)) && blockManager.blockInfoManager.lockForWriting(blockId.get, blocking = false).isDefined) {
                   selectedBlocks += thisBlockId
                   entries.synchronized {
                     freedMemory += entries.get(thisBlockId).size
@@ -714,7 +714,7 @@ private[spark] class MemoryStore(
           breakable {
             for ((thisBlockId, thisRefCount) <- listMap){
               if (freedMemory < space) {
-                if (blockManager.blockInfoManager.lockForWriting(blockId.get, blocking = false).isDefined) {
+                if (blockIsEvictable(blockId.get, entries.get(thisBlockId)) && blockManager.blockInfoManager.lockForWriting(blockId.get, blocking = false).isDefined) {
                   selectedBlocks += thisBlockId
                   entries.synchronized {
                     freedMemory += entries.get(thisBlockId).size
