@@ -735,7 +735,7 @@ private[spark] class MemoryStore(
           case SerializedMemoryEntry(buffer, _, _) => Right(buffer)
         }
         val newEffectiveStorageLevel =
-          blockEvictionHandler.dropFromMemory(blockId, () => data)(entry.classTag)
+          blockManager.dropFromMemory(blockId, () => data)(entry.classTag)
         if (newEffectiveStorageLevel.isValid) {
           // The block is still present in at least one store, so release the lock
           // but don't delete the block info
