@@ -22,6 +22,9 @@ import java.io.{Externalizable, ObjectInput, ObjectOutput}
 import org.apache.spark.rpc.RpcEndpointRef
 import org.apache.spark.util.Utils
 
+import scala.collection.immutable.List
+import scala.collection.mutable
+
 private[spark] object BlockManagerMessages {
   //////////////////////////////////////////////////////////////////////////////////
   // Messages from the master to slaves.
@@ -41,6 +44,17 @@ private[spark] object BlockManagerMessages {
   // Remove all blocks belonging to a specific broadcast.
   case class RemoveBroadcast(broadcastId: Long, removeFromDriver: Boolean = true)
     extends ToBlockManagerSlave
+  // Broadcast JobDAG to slaves. yyh
+  case class BroadcastJobDAG(jobId: Int, jobDAG: Option[mutable.HashMap[Int, Int]])
+    extends ToBlockManagerSlave
+
+  // yyh: on evict a block, update the ref count of its peers
+  case class CheckPeersStrictly(blockId: BlockId) extends ToBlockManagerSlave
+
+  case class CheckPeersConservatively(blockId: BlockId) extends ToBlockManagerSlave
+
+  // Broadcast refcount to slaves
+  // case class BroadcastRefCount(refCount: mutable.HashMap[Int, Int]) extends ToBlockManagerSlave
 
   /**
    * Driver -> Executor message to trigger a thread dump.
@@ -111,4 +125,29 @@ private[spark] object BlockManagerMessages {
   case class BlockManagerHeartbeat(blockManagerId: BlockManagerId) extends ToBlockManagerMaster
 
   case class HasCachedBlocks(executorId: String) extends ToBlockManagerMaster
+
+
+  // Initiate broadcast of jobid
+  case class StartBroadcastJobId(jobId: Int) extends ToBlockManagerMaster
+
+  // Initiate broadcast of refcount
+  case class StartBroadcastRefCount(jobId: Int, partitionNumber: Int,
+                                    refCount: mutable.HashMap[Int, Int])
+    extends ToBlockManagerMaster
+
+  // yyh: report the cache hit and miss to the master on stop of the block manager on slaves
+  case class ReportCacheHit(blockManagerId: BlockManagerId, list: List[Int])
+    extends ToBlockManagerMaster
+
+  // yyh: ask for app-DAG, job-DAG, and peers information from the master
+  // on initialization of the block manager on slaves
+  case class GetRefProfile(blockManagerId: BlockManagerId, slaveEndPoint: RpcEndpointRef)
+    extends ToBlockManagerMaster
+
+  // When a block with peer is evicted, tell the master
+  case class BlockWithPeerEvicted(blockId: BlockId) extends ToBlockManagerMaster
+
+  // case class ReportRefMap(blockManagerId: BlockManagerId, refMap: mutable.Map[BlockId, Int])
+  // extends ToBlockManagerMaster
+
 }

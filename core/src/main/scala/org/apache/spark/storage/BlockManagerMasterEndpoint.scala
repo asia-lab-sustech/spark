@@ -17,12 +17,13 @@
 
 package org.apache.spark.storage
 
+import java.io.FileWriter
+import java.nio.file.{Files, Paths}
 import java.util.{HashMap => JHashMap}
 
 import scala.collection.mutable
 import scala.collection.JavaConverters._
 import scala.concurrent.{ExecutionContext, Future}
-
 import org.apache.spark.SparkConf
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
@@ -30,6 +31,9 @@ import org.apache.spark.rpc.{RpcCallContext, RpcEndpointRef, RpcEnv, ThreadSafeR
 import org.apache.spark.scheduler._
 import org.apache.spark.storage.BlockManagerMessages._
 import org.apache.spark.util.{ThreadUtils, Utils}
+
+import scala.collection.immutable.List
+import scala.io.Source
 
 /**
  * BlockManagerMasterEndpoint is an [[ThreadSafeRpcEndpoint]] on the master node to track statuses
@@ -54,6 +58,65 @@ class BlockManagerMasterEndpoint(
 
   private val askThreadPool = ThreadUtils.newDaemonCachedThreadPool("block-manager-ask-thread-pool")
   private implicit val askExecutionContext = ExecutionContext.fromExecutorService(askThreadPool)
+
+  private val startTime = System.currentTimeMillis
+  logInfo(s"yyh: Log start time: $startTime")
+  var RDDHit = 0
+  var RDDMiss = 0
+  var diskRead = 0
+  var diskWrite = 0
+  var totalReference = 0
+  private val refProfile = mutable.HashMap[Int, Int]() // yyh
+  private val refProfile_By_Job = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
+  private val appName = conf.getAppName.filter(!" ".contains(_))
+  val path = System.getProperty("user.dir")
+  val appDAG = path + "/" + appName + ".txt"
+  logInfo(s"LRC: Driver Endpoint tries to read profile: path: $appDAG")
+  if (Files.exists(Paths.get(appDAG))) {
+    for (line <- Source.fromFile(appDAG).getLines()) {
+      val z = line.split(":")
+      refProfile(z(0).toInt) = z(1).toInt
+    }
+    // refProfile(-1) = Int.MaxValue
+  }
+
+  val jobDAG = path + "/" + appName + "-JobDAG.txt"
+  logInfo(s"LRC: Driver Endpoint tries to read profile by job: path: $jobDAG")
+  if (Files.exists(Paths.get(jobDAG))) {
+    for (line <- Source.fromFile(jobDAG).getLines()) {
+      val z = line.split("-")
+      val jobId = z(0).toInt
+      val this_refProfile = mutable.HashMap[Int, Int]()
+      if (z.length > 1) {
+        // some jobs may have no rdd refs
+        val refs = z(1).split(";")
+        for (ref <- refs) {
+          val pairs = ref.split(":")
+          this_refProfile(pairs(0).toInt) = pairs(1).toInt
+        }
+      }
+      refProfile_By_Job(jobId) = this_refProfile
+    }
+  }
+  /** for all-or-nothing property */
+
+  private val peerProfile = mutable.HashMap[Int, Int]()
+  // Notice that each rdd has at most one peer rdd, as no operation handles more than two RDDs
+  // Be careful, here we only assume that all the peers are only required once.
+  // That means once either of the peer got evicted, it is safe to clear the ref count of the other
+  // for all-or-nothing considerations.
+  // It's the BlockManager on slaves who decide to report an eviction of a block with a peer or not.
+  // In the case where a block whose peer is already evicted, the BlockManger should not report.
+
+  val peers = path + "/" + appName + "-Peers.txt"
+  logInfo(s"yyh: Driver Endpoint tries to read peers profile: path :$peers")
+  if (Files.exists(Paths.get(peers))) {
+    for (line <- Source.fromFile(peers).getLines()) {
+      val z = line.split(":")
+      peerProfile(z(0).toInt) = z(1).toInt // mutual peers, as later we only search by key
+      peerProfile(z(1).toInt) = z(0).toInt
+    }
+  }
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case RegisterBlockManager(blockManagerId, maxMemSize, slaveEndpoint) =>
@@ -124,6 +187,25 @@ class BlockManagerMasterEndpoint(
           }
         case None => context.reply(false)
       }
+
+    case StartBroadcastJobId(jobId) =>
+      broadcastJobDAG(jobId) // , refProfile_By_Job(jobId))
+      context.reply(true)
+    case ReportCacheHit(blockManagerId, list) => // yyh
+      updateCacheHit(blockManagerId, list)
+      context.reply(true)
+
+    case GetRefProfile(blockManagerId, slaveEndPoint) => // yyh
+      context.reply(getRefProfile(blockManagerId, slaveEndPoint))
+
+    case BlockWithPeerEvicted(blockId) => // yyh
+      onPeerEvicted(blockId)
+      context.reply(true)
+
+    case StartBroadcastRefCount(jobId, partitionNumber, refCount) =>
+      broadcastJobDAG(jobId, partitionNumber, refCount)
+      context.reply(true)
+
   }
 
   private def removeRdd(rddId: Int): Future[Seq[Int]] = {
@@ -396,7 +478,144 @@ class BlockManagerMasterEndpoint(
     }
   }
 
+  private def broadcastJobDAG(jobId: Int): Unit = {
+    for (bm <- blockManagerInfo.values) {
+      val (currentRefMap, refMap) = bm.slaveEndpoint.askWithRetry[(mutable.Map[BlockId, Int],
+        mutable.Map[BlockId, Int])](BroadcastJobDAG(jobId, None))
+      // val (currentRefMap, refMap) = bm.broadcastJobDAG(jobId)
+      logInfo(s"LRC: Updated CurrentRefMap from $bm: $currentRefMap")
+      logInfo(s"LRC: Updated RefMap from $bm: $refMap")
+    }
+  }
+
+  private def broadcastJobDAG(jobId: Int, partitionNumber: Int,
+                              refCount: mutable.HashMap[Int, Int]): Unit = {
+    logInfo(s"LRC: Start to broadcast the profiled refCount of job $jobId")
+    logInfo(s"$refCount")
+    for (bm <- blockManagerInfo.values) {
+      val (currentRefMap, refMap) = bm.slaveEndpoint.askWithRetry[(mutable.HashMap[BlockId, Int],
+        mutable.HashMap[BlockId, Int])](BroadcastJobDAG(jobId, Some(refCount)))
+      // val (currentRefMap, refMap) = bm.broadcastJobDAG(jobId)
+      logInfo(s"LRC: Updated CurrentRefMap from $bm: $currentRefMap")
+      logInfo(s"LRC: Updated RefMap from $bm: $refMap")
+    }
+    // update the total reference count.
+    this.synchronized{totalReference += refCount.foldLeft(0)(_ + _._2) * partitionNumber}
+  }
+
+  /**
+  private def broadcastRefCount(refCount: mutable.HashMap[Int, Int]): Unit = {
+    for (bm <- blockManagerInfo.values) {
+      bm.slaveEndpoint.askWithRetry(BroadcastRefCount(refCount))
+      logInfo(s"zcl: broadcasted refcount to $bm")
+    }
+  }
+   */
+
+  private def updateCacheHit(blockManagerId: BlockManagerId, list: List[Int]):
+  Boolean = {
+    // list (hitCount, missCount, diskRead, diskWrite)
+    this.synchronized{
+      RDDHit += list(0)
+      RDDMiss += list(1)
+      diskRead += list(2)
+      diskWrite += list(3)
+
+    }
+    logDebug(s"LRC: Received Report from $blockManagerId: " +
+      s"RDD Hit count increased by ${list(0)}. now $RDDHit" +
+      s"RDD Miss count increased by ${list(1)}. now $RDDMiss" +
+      s"Disk Read count increased by ${list(2)}. now $diskRead" +
+      s"Disk Write count increased by ${list(3)}. now $diskWrite"
+    )
+    true
+  }
+
+  private def getRefProfile(blockManagerId: BlockManagerId, slaveEndPoint: RpcEndpointRef):
+  (mutable.HashMap[Int, Int], mutable.HashMap[Int, mutable.HashMap[Int, Int]],
+    mutable.HashMap[Int, Int]) = {
+    logDebug(s"LRC: Got the request of refProfile from block manager $blockManagerId, responding")
+    (refProfile, refProfile_By_Job, peerProfile)
+  }
+
+  private def onPeerEvicted(blockId: BlockId): Unit = {
+    val rddId = blockId.asRDDId.toString.split("_")(1).toInt
+    // val index = blockId.asRDDId.toString.split("_")(2).toInt
+    val peerRDDId = peerProfile.get(rddId)
+
+    if (peerRDDId.isEmpty) {
+      logError(s"LRC: The reported block $blockId has no peer!")
+    }
+    else {
+      // For conservative all-or-nothing, decrease the ref count of the corresponding block
+      // val peerBlockId = new RDDBlockId(peerRDDId.get, index)
+      notifyPeersConservatively(blockId)
+
+      // For strict all-or-nothing, decrease the ref count of all the blocks of both rdds
+      notifyPeersStrictly(blockId)
+
+
+    }
+  }
+  private def notifyPeersConservatively(blockId: BlockId): Unit = {
+    for (bm <- blockManagerInfo.values) {
+      bm.slaveEndpoint.ask[Boolean](CheckPeersConservatively(blockId))
+    }
+
+    /**
+    val locations = blockLocations.get(blockId)
+    if (locations != null) {
+      locations.foreach { blockManagerId: BlockManagerId =>
+        val blockManager = blockManagerInfo.get(blockManagerId)
+        if (blockManager.isDefined) {
+          // yyh: tell the blockManager to decrease the ref count of the given block
+          logInfo(s"yyh: Telling $blockManager to decrease the ref count of $blockId")
+          blockManager.get.slaveEndpoint.ask[Boolean](DecreaseBlockRefCount(blockId))
+        }
+      }
+    }
+     */
+  }
+  private def notifyPeersStrictly(blockId: BlockId): Unit = {
+    for (bm <- blockManagerInfo.values) {
+      bm.slaveEndpoint.ask[Boolean](CheckPeersStrictly(blockId))
+    }
+
+    /** TRY TO FIND THE LOCATION OF EACH BLOCK.
+     * But we are not sure whether all the block status are reported to the master
+    val blocks = blockLocations.asScala.keys.flatMap(_.asRDDId).filter(_.rddId == rddId)
+    blocks.foreach { blockId =>
+      val bms: mutable.HashSet[BlockManagerId] = blockLocations.get(blockId)
+      bms.foreach{
+        bm =>
+          {
+            blockManagerInfo.get(bm)
+              .get.slaveEndpoint.ask[Boolean](DecreaseBlockRefCount(blockId))
+            logInfo(s"yyh: Telling $bm to decrease the ref count of $blockId")
+          }
+      }
+
+    }
+     */
+  }
+
   override def onStop(): Unit = {
+
+    val stopTime = System.currentTimeMillis
+    val duration = stopTime - startTime
+    RDDHit = totalReference - RDDMiss // yyh: align total reference count
+    if (RDDHit < 0 ){
+      RDDHit = 0
+    }
+    logInfo(s"LRC: log stoptime: $stopTime, duration: $duration ms")
+    logInfo(s"LRC: Closing blockMangerMasterEndPoint, RDD hit $RDDHit, RDD miss $RDDMiss")
+    logInfo(s"LRC: Disk read count: $diskRead, disk write count: $diskWrite")
+    // val path = System.getProperty("user.dir")
+    val appName = conf.getAppName
+    val fw = new FileWriter("result.txt", true) // true means append mode
+    fw.write(s"AppName: $appName, Runtime: $duration\n")
+    fw.write(s"RDD Hit\t$RDDHit\tRDD Miss\t$RDDMiss\n")
+    fw.close()
     askThreadPool.shutdownNow()
   }
 }

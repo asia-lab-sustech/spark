@@ -17,15 +17,17 @@
 
 package org.apache.spark.storage
 
-import scala.collection.Iterable
+import scala.collection.{Iterable, mutable}
 import scala.collection.generic.CanBuildFrom
 import scala.concurrent.Future
-
 import org.apache.spark.{SparkConf, SparkException}
 import org.apache.spark.internal.Logging
 import org.apache.spark.rpc.RpcEndpointRef
-import org.apache.spark.storage.BlockManagerMessages._
+import org.apache.spark.storage.BlockManagerMessages.{BlockWithPeerEvicted, GetRefProfile, ReportCacheHit, StartBroadcastJobId, StartBroadcastRefCount, _}
 import org.apache.spark.util.{RpcUtils, ThreadUtils}
+
+import scala.collection.immutable.List
+import scala.collection.mutable.HashMap
 
 private[spark]
 class BlockManagerMaster(
@@ -102,8 +104,10 @@ class BlockManagerMaster(
    * Remove a block from the slaves that have it. This can only be used to remove
    * blocks that the driver knows about.
    */
-  def removeBlock(blockId: BlockId) {
-    driverEndpoint.askWithRetry[Boolean](RemoveBlock(blockId))
+  def removeBlock(blockId: BlockId): Unit = {
+    if (!blockId.isRDD) {  // yyh: the rdd blocks can only be removed by memory store itself
+      driverEndpoint.askWithRetry[Boolean](RemoveBlock(blockId))
+    }
   }
 
   /** Remove all blocks belonging to the given RDD. */
@@ -217,6 +221,43 @@ class BlockManagerMaster(
   def hasCachedBlocks(executorId: String): Boolean = {
     driverEndpoint.askWithRetry[Boolean](HasCachedBlocks(executorId))
   }
+  /**
+   * yyh, report to the driver the hit and miss count on this blockmanager
+   */
+  def reportCacheHit(blockManagerId: BlockManagerId, list: List[Int]): Boolean = {
+    driverEndpoint.askWithRetry[Boolean](ReportCacheHit(blockManagerId, list))
+  }
+
+  /**
+   * yyh, get the refProfile from the driver, including appDAG, jobDAGs and peer information
+   */
+  def getRefProfile(blockManagerId: BlockManagerId, slaveEndPoint: RpcEndpointRef):
+  (mutable.HashMap[Int, Int], mutable.HashMap[Int, mutable.HashMap[Int, Int]],
+    mutable.HashMap[Int, Int]) = {
+    logInfo(s"yyh: $blockManagerId try to get refprofile from the master endpoint")
+    driverEndpoint.askWithRetry[(mutable.HashMap[Int, Int], mutable.HashMap[Int,
+      mutable.HashMap[Int, Int]], mutable.HashMap[Int, Int])](GetRefProfile
+    (blockManagerId, slaveEndPoint))
+  }
+
+  /**
+   * yyh report the current ref map to the driver. For debug
+   */
+  // def reportRefMap(blockManagerId: BlockManagerId, refMap: mutable.Map[BlockId, Int]): Unit = {
+  //  driverEndpoint.askWithRetry[Boolean](ReportRefMap(blockManagerId, refMap))
+  // }
+
+  /**
+   * yyh, for all-or-nothing
+   * If a block with peer is evicted, tell the master
+   */
+  /**
+   * yyh, get the refProfile from the driver, including appDAG, jobDAGs and peer information
+   */
+  def reportBlockEviction(blockId: BlockId): Unit = {
+    logInfo(s"yyh: $blockId is evicted, tell the master as it has a peer")
+    driverEndpoint.askWithRetry[Boolean](BlockWithPeerEvicted(blockId))
+  }
 
   /** Stop the driver endpoint, called only on the Spark driver node */
   def stop() {
@@ -226,6 +267,17 @@ class BlockManagerMaster(
       logInfo("BlockManagerMaster stopped")
     }
   }
+
+  /** Broadcast the JobId */
+  def broadcastJobId(jobId: Int): Unit = {
+    tell(StartBroadcastJobId(jobId))
+  }
+
+  /** Broadcast reference count */
+  def broadcastRefCount(jobId: Int, partitionNumber: Int, refCount: HashMap[Int, Int]): Unit = {
+    tell(StartBroadcastRefCount(jobId, partitionNumber, refCount))
+  }
+
 
   /** Send a one-way message to the master endpoint, to which we expect it to reply with true. */
   private def tell(message: Any) {
