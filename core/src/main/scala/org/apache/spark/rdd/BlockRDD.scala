@@ -18,9 +18,11 @@
 package org.apache.spark.rdd
 
 import scala.reflect.ClassTag
-
 import org.apache.spark._
 import org.apache.spark.storage.{BlockId, BlockManager}
+
+import scala.concurrent.Await
+import scala.concurrent.duration.Duration
 
 private[spark] class BlockRDDPartition(val blockId: BlockId, idx: Int) extends Partition {
   val index = idx
@@ -44,7 +46,9 @@ class BlockRDD[T: ClassTag](sc: SparkContext, @transient val blockIds: Array[Blo
     assertValid()
     val blockManager = SparkEnv.get.blockManager
     val blockId = split.asInstanceOf[BlockRDDPartition].blockId
-    blockManager.get[T](blockId) match {
+    val data = blockManager.get_future[T](blockId)
+    val data1 = Await.result(data, Duration.Inf)
+    data1 match {
       case Some(block) => block.data.asInstanceOf[Iterator[T]]
       case None =>
         throw new Exception("Could not compute split, block " + blockId + " not found")
