@@ -585,22 +585,24 @@ private[spark] class MemoryStore(
         }
       }
 
-      // entries.synchronized {
-      // val iterator = entries.entrySet().iterator()
       currentRefMap.synchronized {
-        // Sort all the blocks in current cache by their ref counts
-        // Only rdd blocks will be put in the currentRefMap
-        val listMap = ListMap(currentRefMap.toSeq.sortBy(_._2): _*)
-        breakable {
-          for ((thisBlockId, thisRefCount) <- listMap){
-            if (thisRefCount < blockToCacheRefCount && freedMemory < space) {
-              selectedBlocks += thisBlockId
-              entries.synchronized {
-                freedMemory += entries.get(thisBlockId).size
+      // Sort all the blocks in current cache by their ref counts
+      // Only rdd blocks will be put in the currentRefMap
+      val listMap = ListMap(currentRefMap.toSeq.sortBy(_._2): _*)
+      breakable {
+        for ((thisBlockId, thisRefCount) <- listMap){
+          if (entries.containsKey(blockId) && blockIsEvictable(blockId.get, entries.get(blockId))) {
+            if (blockManager.blockInfoManager.lockForWriting(blockId.get, blocking = false).isDefined) {
+              if (thisRefCount < blockToCacheRefCount && freedMemory < space) {
+                selectedBlocks += thisBlockId
+                entries.synchronized {
+                  freedMemory += entries.get(thisBlockId).size
+                }
+              }
+              else {
+                break
               }
             }
-            else {
-              break
             }
           }
         }

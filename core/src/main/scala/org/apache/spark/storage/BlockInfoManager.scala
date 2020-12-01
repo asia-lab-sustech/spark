@@ -247,8 +247,10 @@ private[storage] class BlockInfoManager extends Logging {
     infos.get(blockId) match {
       case Some(info) =>
         if (info.writerTask != currentTaskAttemptId) {
-          throw new SparkException(
-            s"Task $currentTaskAttemptId has not locked block $blockId for writing")
+          //throw new SparkException(
+            //s"Task $currentTaskAttemptId has not locked block $blockId for writing")
+          logWarning(s"$blockId is not locked for writing")
+          info
         } else {
           info
         }
@@ -336,7 +338,7 @@ private[storage] class BlockInfoManager extends Logging {
    *
    * @return the ids of blocks whose pins were released
    */
-  def releaseAllLocksForTask(taskAttemptId: TaskAttemptId): Seq[BlockId] = {
+  def releaseAllLocksForTask(taskAttemptId: TaskAttemptId): Seq[BlockId] = synchronized {
     val blocksWithReleasedLocks = mutable.ArrayBuffer[BlockId]()
 
     val readLocks = synchronized {
@@ -357,11 +359,9 @@ private[storage] class BlockInfoManager extends Logging {
       val blockId = entry.getElement
       val lockCount = entry.getCount
       blocksWithReleasedLocks += blockId
-      synchronized {
-        get(blockId).foreach { info =>
-          info.readerCount -= lockCount
-          assert(info.readerCount >= 0)
-        }
+      get(blockId).foreach { info =>
+        info.readerCount -= lockCount
+        assert(info.readerCount >= 0)
       }
     }
 
