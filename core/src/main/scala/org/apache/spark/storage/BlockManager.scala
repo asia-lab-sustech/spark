@@ -46,6 +46,7 @@ import org.apache.spark.util.io.ChunkedByteBuffer
 
 import scala.collection.immutable.List
 import scala.collection.mutable
+import scala.concurrent.ExecutionContext.Implicits.global
 
 /* Class for returning a fetched block and associated metrics. */
 private[spark] class BlockResult(
@@ -72,6 +73,25 @@ private[spark] class BlockManager(
     securityManager: SecurityManager,
     numUsableCores: Int)
   extends BlockDataManager with BlockEvictionHandler with Logging {
+
+  def get_future[T: ClassTag](blockId: BlockId): Future[Option[BlockResult]] = {
+    val local = Future { getLocalValues(blockId)}
+    val blockData = for ( localData <- local) yield {
+      if (localData.isDefined) {
+        logInfo(s"Found block $blockId locally")
+        localData
+      }
+      else {
+        val remote = getRemoteValues[T](blockId)
+        if (remote.isDefined) {
+          logInfo(s"Found block $blockId remotely")
+          remote
+        }
+        else None
+      }
+    }
+    blockData
+  }
 
   private[spark] val externalShuffleServiceEnabled =
     conf.getBoolean("spark.shuffle.service.enabled", false)
