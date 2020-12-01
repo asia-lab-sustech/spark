@@ -568,46 +568,47 @@ private[spark] class MemoryStore(
 //          }
 //        }
 //      }
-
-      var blockToCacheRefCount = Int.MaxValue
-      // yyh: if this is a broadcast block, cache it anyway
-      refMap.synchronized {
-        if (blockId.isDefined && blockId.get.isRDD){
-          if (refMap.contains(blockId.get))
-          {
-            blockToCacheRefCount = refMap(blockId.get)
-            logInfo(s"LRC: The ref count of $blockId is $blockToCacheRefCount")
-          }
-          else {
-            blockToCacheRefCount = 1
-            logError(s"LRC: The ref count of $blockId is not in the refMap")
+      entries.synchronized{
+        var blockToCacheRefCount = Int.MaxValue
+        // yyh: if this is a broadcast block, cache it anyway
+        refMap.synchronized {
+          if (blockId.isDefined && blockId.get.isRDD){
+            if (refMap.contains(blockId.get))
+            {
+              blockToCacheRefCount = refMap(blockId.get)
+              logInfo(s"LRC: The ref count of $blockId is $blockToCacheRefCount")
+            }
+            else {
+              blockToCacheRefCount = 1
+              logError(s"LRC: The ref count of $blockId is not in the refMap")
+            }
           }
         }
-      }
 
-      currentRefMap.synchronized {
-      // Sort all the blocks in current cache by their ref counts
-      // Only rdd blocks will be put in the currentRefMap
-      val listMap = ListMap(currentRefMap.toSeq.sortBy(_._2): _*)
-      breakable {
-        for ((thisBlockId, thisRefCount) <- listMap){
-          if (entries.containsKey(blockId) && blockIsEvictable(blockId.get, entries.get(blockId))) {
-            if (blockManager.blockInfoManager.lockForWriting(blockId.get, blocking = false).isDefined) {
-              if (thisRefCount < blockToCacheRefCount && freedMemory < space) {
-                selectedBlocks += thisBlockId
-                entries.synchronized {
-                  freedMemory += entries.get(thisBlockId).size
+        currentRefMap.synchronized {
+          // Sort all the blocks in current cache by their ref counts
+          // Only rdd blocks will be put in the currentRefMap
+          val listMap = ListMap(currentRefMap.toSeq.sortBy(_._2): _*)
+          breakable {
+            for ((thisBlockId, thisRefCount) <- listMap){
+              if (entries.containsKey(blockId) && blockIsEvictable(blockId.get, entries.get(blockId))) {
+                if (blockManager.blockInfoManager.lockForWriting(blockId.get, blocking = false).isDefined) {
+                  if (thisRefCount < blockToCacheRefCount && freedMemory < space) {
+                    selectedBlocks += thisBlockId
+                    entries.synchronized {
+                      freedMemory += entries.get(thisBlockId).size
+                    }
+                  }
+                  else {
+                    break
+                  }
                 }
               }
-              else {
-                break
-              }
-            }
             }
           }
         }
+        logInfo(s"LRC: To evict blocks $selectedBlocks")
       }
-      logInfo(s"LRC: To evict blocks $selectedBlocks")
 
 
       def dropBlock[T](blockId: BlockId, entry: MemoryEntry[T]): Unit = {
