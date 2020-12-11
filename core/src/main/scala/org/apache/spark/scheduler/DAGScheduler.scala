@@ -617,6 +617,7 @@ class DAGScheduler(
     val nodeAndParents = new HashMap[Int, mutable.HashSet[Int]]
     val collectionOfRDDThisJob = new mutable.HashSet[Int]
     var totalAccessNumber = 0
+    var newInMemoryRDD = new mutable.HashSet[Int]
 
     // RDDs pending to visit
     var waitingForVisit = new Stack[RDD[_]]
@@ -626,6 +627,7 @@ class DAGScheduler(
         if (!visitedRDDs.contains(rdd.id)) {
           if (!collectionOfRDDThisJob.contains(rdd.id)) {
             collectionOfRDDThisJob.add(rdd.id)
+            newInMemoryRDD.add(rdd.id)
             //          visitedRDDs.add(rdd.id)
           } else {
             return
@@ -633,6 +635,7 @@ class DAGScheduler(
         } else {
           return
         }
+      }
 
         nodeAndParents.put(rdd.id, new mutable.HashSet[Int])
         for (dep <- rdd.dependencies) {
@@ -674,7 +677,7 @@ class DAGScheduler(
           }
         }
       }
-    }
+
 
     def notRelatedRDD(rdd: Int): Boolean = {
       var flag = true
@@ -752,6 +755,15 @@ class DAGScheduler(
       DAGInfoMap(rddid) ++= traceArray(rddid).map(reuseinterval => (reuseinterval, 1))
         .groupBy(_._1)
         .map(l => (l._1, l._2.map(_._2).reduce(_+_)))
+    }
+
+    if (newInMemoryRDD.size > 0) {
+      for (can <- newInMemoryRDD) {
+        logWarning(s"Leasing: drop new in memory RDD: " + can)
+        if (DAGInfoMap.contains(can)) {
+          DAGInfoMap -= can
+        }
+      }
     }
 
     logWarning(s"Leasing: Total Memory Access Number is $totalAccessNumber")
