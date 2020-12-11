@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import scala.annotation.tailrec
 import scala.collection.{Map, mutable}
-import scala.collection.mutable.{HashMap, HashSet, Queue, Stack}
+import scala.collection.mutable.{ArrayBuffer, HashMap, HashSet, Queue, Stack}
 import scala.concurrent.duration._
 import scala.language.existentials
 import scala.language.postfixOps
@@ -41,6 +41,8 @@ import org.apache.spark.rpc.RpcTimeout
 import org.apache.spark.storage._
 import org.apache.spark.storage.BlockManagerMessages.BlockManagerHeartbeat
 import org.apache.spark.util._
+
+import scala.collection.immutable.Map
 
 /**
  * The high-level scheduling layer that implements stage-oriented scheduling. It computes a DAG of
@@ -602,6 +604,165 @@ class DAGScheduler(
   }
 
 
+  //! TREAT ALL THE DEPENDCENCY THE SAME !!
+
+  // the Node that has been visited
+  private var visitedRDDs = new HashSet[Int]
+
+  private def profileDAGThisJob(rdd: RDD[_], jobId: Int): Unit = {
+    logWarning("Leasing: profiling " + jobId + "rdd: " + rdd.id + " " + rdd.getStorageLevel.useMemory)
+   // val DAGInfoByJob = new mutable.HashMap[Int, HashMap[Int, Int]] // RddId => HashMap(reuseInterval, Frequency)
+
+    val nodeAndChildren = new HashMap[Int, mutable.HashSet[Int]]
+    val nodeAndParents = new HashMap[Int, mutable.HashSet[Int]]
+    val collectionOfRDDThisJob = new mutable.HashSet[Int]
+    var totalAccessNumber = 0
+
+    // RDDs pending to visit
+    var waitingForVisit = new Stack[RDD[_]]
+    // here we first visit all the node in this job, and get an map rdd => children
+    def firstVisit(rdd: RDD[_]):Unit = {
+      if (rdd.getStorageLevel.useMemory) {
+        if (!visitedRDDs.contains(rdd.id)) {
+          if (!collectionOfRDDThisJob.contains(rdd.id)) {
+            collectionOfRDDThisJob.add(rdd.id)
+            //          visitedRDDs.add(rdd.id)
+          } else {
+            return
+          }
+        } else {
+          return
+        }
+
+        nodeAndParents.put(rdd.id, new mutable.HashSet[Int])
+        for (dep <- rdd.dependencies) {
+          totalAccessNumber += 1
+          logWarning("Leasing: processing depencency between rdd: " + rdd.id + " " + dep.rdd.id)
+          nodeAndParents(rdd.id).add(dep.rdd.id)
+          dep match {
+            case shufDep: ShuffleDependency[_, _, _] =>
+              if (!visitedRDDs.contains(shufDep.rdd.id)) {
+                if (!waitingForVisit.contains(shufDep.rdd)) {
+                  if (!collectionOfRDDThisJob.contains(shufDep.rdd.id)) {
+                    waitingForVisit.push(shufDep.rdd)
+                  }
+                }
+              }
+
+              if (nodeAndChildren.keySet contains shufDep.rdd.id) {
+                nodeAndChildren(shufDep.rdd.id).add(rdd.id)
+              } else {
+                nodeAndChildren.put(shufDep.rdd.id, new mutable.HashSet[Int])
+                nodeAndChildren(shufDep.rdd.id).add(rdd.id)
+              }
+
+            case narrowDep: NarrowDependency[_] =>
+
+              if (!visitedRDDs.contains(narrowDep.rdd.id)) {
+                if (!waitingForVisit.contains(narrowDep.rdd)) {
+                  if (!collectionOfRDDThisJob.contains(narrowDep.rdd.id)) {
+                    waitingForVisit.push(narrowDep.rdd)
+                  }
+                }
+              }
+              if (nodeAndChildren.keySet contains narrowDep.rdd.id) {
+                nodeAndChildren(narrowDep.rdd.id).add(rdd.id)
+              } else {
+                nodeAndChildren.put(narrowDep.rdd.id, new mutable.HashSet[Int])
+                nodeAndChildren(narrowDep.rdd.id).add(rdd.id)
+              }
+          }
+        }
+      }
+    }
+
+    def notRelatedRDD(rdd: Int): Boolean = {
+      var flag = true
+      for (dep <- nodeAndParents(rdd)) {
+        if (collectionOfRDDThisJob.contains(dep) ) {
+          flag = false
+        }
+      }
+      flag
+    }
+
+
+    waitingForVisit.push(rdd)
+    logWarning("Leasing: before first visist")
+    while (waitingForVisit.nonEmpty) {
+      firstVisit(waitingForVisit.pop())
+    } // here we get the children and parents Map nodeAndChildren rdd => children
+    logWarning(s"Leasing: we got the nodeToChildren:$nodeAndChildren and nodeToParents:$nodeAndParents")
+
+    // here we renew the visited RDDs
+    visitedRDDs = visitedRDDs ++ collectionOfRDDThisJob
+
+    // here only rdd that has more than one children will be reused again
+    val rddThatHasMoreThanOneChilren = collectionOfRDDThisJob.filter( x =>  (nodeAndChildren(x).size > 1))
+
+    // A rdd is computable when 1) all dependencies are computed in the traceSet
+    // 2) Or the '''uncomputed''' dependencies are '''unrelated'''
+    def computable(node: Int, traceSet: mutable.ArrayBuffer[Int]) = {
+      logWarning(s"Leasing: verify the computbility of $node")
+      var flag = true
+      for (parent <- nodeAndParents(node)) {
+        if (!traceSet.contains(parent)) {
+          if (!notRelatedRDD(parent)) {
+            flag = false
+          }
+        }
+      }
+       flag
+    }
+    // traceMap: is the child => trace of the deepest
+    def goDeepest(child: Int, traceSet: mutable.ArrayBuffer[Int]): Unit = {
+      logWarning(s"Leasing: Godeepst pass by $child")
+      if ( computable(child, traceSet)) {
+        traceSet += child
+      }
+
+      for ( grandChild <- nodeAndChildren(child)) {
+        goDeepest(grandChild, traceSet)
+      }
+    }
+
+    val traceMap = new mutable.HashMap[Int, HashMap[Int ,mutable.ArrayBuffer[Int]]]
+    for (reusableRdd <- rddThatHasMoreThanOneChilren) {
+      traceMap.put(reusableRdd, new mutable.HashMap[Int, mutable.ArrayBuffer[Int]])
+      for (child <- nodeAndChildren(reusableRdd)) {
+        traceMap(reusableRdd).put(child, scala.collection.mutable.ArrayBuffer.empty[Int])
+        goDeepest(child, traceMap(reusableRdd)(child))
+      }
+    }
+    logWarning(s"Leasing: goDeepest out!!")
+    logWarning(s"Leasing: RDDs of this job is $collectionOfRDDThisJob")
+    val DAGInfoMap = new HashMap[Int, HashMap[Int, Int]] // rddid => (reuseInterval=> frequency)
+    for (rdd <- collectionOfRDDThisJob) {
+      DAGInfoMap.put(rdd, new HashMap[Int, Int])
+    }
+
+    // convert memory trace to reuse interval and frequency
+    val traceArray = new mutable.HashMap[Int, ArrayBuffer[Int]]
+    for ( (rddid, tracemap) <- traceMap) {
+      traceArray(rddid) = ArrayBuffer[Int]()
+      for ( (_, tracearray) <- tracemap ) {
+        traceArray(rddid) += tracearray.size
+      }
+      DAGInfoMap(rddid) = scala.collection.mutable.HashMap[Int, Int]()
+      DAGInfoMap(rddid) ++= traceArray(rddid).map(reuseinterval => (reuseinterval, 1))
+        .groupBy(_._1)
+        .map(l => (l._1, l._2.map(_._2).reduce(_+_)))
+    }
+
+    logWarning(s"Leasing: Total Memory Access Number is $totalAccessNumber")
+    logWarning(s"Leasing: Trace of $jobId is $DAGInfoMap")
+    val numberOfRDDPartitions = rdd.getNumPartitions
+  }
+
+
+
+
+
   /**
    * Registers the given jobId among the jobs that need the given stage and
    * all of that stage's ancestors.
@@ -1007,6 +1168,7 @@ class DAGScheduler(
       SparkListenerJobStart(job.jobId, jobSubmissionTime, stageInfos, properties))
 
     profileRefCountStageByStage(finalRDD, jobId)
+    profileDAGThisJob(finalRDD, jobId)
     submitStage(finalStage)
 
     submitWaitingStages()
@@ -1105,7 +1267,7 @@ class DAGScheduler(
         outputCommitCoordinator.stageStart(
           stage = s.id, maxPartitionId = s.rdd.partitions.length - 1)
     }
-    val taskIdToLocations: Map[Int, Seq[TaskLocation]] = try {
+    val taskIdToLocations: scala.collection.Map[Int, Seq[TaskLocation]] = try {
       stage match {
         case s: ShuffleMapStage =>
           partitionsToCompute.map { id => (id, getPreferredLocs(stage.rdd, id))}.toMap
