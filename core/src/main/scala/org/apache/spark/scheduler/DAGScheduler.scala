@@ -698,7 +698,7 @@ class DAGScheduler(
     visitedRDDs = visitedRDDs ++ collectionOfRDDThisJob
 
     // here only rdd that has more than one children will be reused again
-    val rddThatHasMoreThanOneChilren = collectionOfRDDThisJob.filter( x =>  (nodeAndChildren(x).size > 1))
+    val rddThatHasMoreThanOneChilren = collectionOfRDDThisJob.filter( x =>  (nodeAndChildren.getOrElse(x, mutable.HashSet[Int]()).size > 1))
 
     // A rdd is computable when 1) all dependencies are computed in the traceSet
     // 2) Or the '''uncomputed''' dependencies are '''unrelated'''
