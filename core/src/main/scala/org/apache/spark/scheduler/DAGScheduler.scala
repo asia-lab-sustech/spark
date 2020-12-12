@@ -701,7 +701,8 @@ class DAGScheduler(
     visitedRDDs = visitedRDDs ++ collectionOfRDDThisJob
 
     // here only rdd that has more than one children will be reused again
-    val rddThatHasMoreThanOneChilren = collectionOfRDDThisJob.filter( x =>  (nodeAndChildren.getOrElse(x, mutable.HashSet[Int]()).size > 1))
+//    val rddThatHasMoreThanOneChilren = collectionOfRDDThisJob.filter( x =>  (nodeAndChildren.getOrElse(x, mutable.HashSet[Int]()).size > 1))
+    val rddThatHasMoreThanOneChilren = nodeAndChildren.keySet.filter(x => (nodeAndChildren.getOrElse(x, mutable.HashSet[Int]()).size > 1))
 
     // A rdd is computable when 1) all dependencies are computed in the traceSet
     // 2) Or the '''uncomputed''' dependencies are '''unrelated'''
@@ -738,9 +739,9 @@ class DAGScheduler(
       }
     }
     logWarning(s"Leasing: goDeepest out!!")
-    logWarning(s"Leasing: RDDs of this job is $collectionOfRDDThisJob")
+    logWarning(s"Leasing: RDDs of this job is $nodeAndChildren.keySet")
     val DAGInfoMap = new HashMap[Int, HashMap[Int, Int]] // rddid => (reuseInterval=> frequency)
-    for (rdd <- collectionOfRDDThisJob) {
+    for (rdd <- nodeAndChildren.keySet) {
       DAGInfoMap.put(rdd, new HashMap[Int, Int])
     }
 
