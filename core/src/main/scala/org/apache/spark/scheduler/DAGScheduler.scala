@@ -624,10 +624,10 @@ class DAGScheduler(
     // here we first visit all the node in this job, and get an map rdd => children
     def firstVisit(rdd: RDD[_]):Unit = {
       if (rdd.getStorageLevel.useMemory) {
-        if (!visitedRDDs.contains(rdd.id)) {
+        newInMemoryRDD.add(rdd.id)
           if (!collectionOfRDDThisJob.contains(rdd.id)) {
-            collectionOfRDDThisJob.add(rdd.id)
-            newInMemoryRDD.add(rdd.id)
+              collectionOfRDDThisJob.add(rdd.id)
+            if (!visitedRDDs.contains(rdd.id)) {
             //          visitedRDDs.add(rdd.id)
           } else {
             return
