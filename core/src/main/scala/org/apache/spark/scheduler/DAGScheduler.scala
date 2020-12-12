@@ -608,13 +608,14 @@ class DAGScheduler(
 
   // the Node that has been visited
   private var visitedRDDs = new HashSet[Int]
-  val nodeAndChildren = new HashMap[Int, mutable.HashSet[Int]]
-  val nodeAndParents = new HashMap[Int, mutable.HashSet[Int]]
+
 
   private def profileDAGThisJob(rdd: RDD[_], jobId: Int): Unit = {
     logWarning("Leasing: profiling " + jobId + "rdd: " + rdd.id + " " + rdd.getStorageLevel.useMemory)
    // val DAGInfoByJob = new mutable.HashMap[Int, HashMap[Int, Int]] // RddId => HashMap(reuseInterval, Frequency)
 
+    val nodeAndChildren = new HashMap[Int, mutable.HashSet[Int]]
+    val nodeAndParents = new HashMap[Int, mutable.HashSet[Int]]
     val collectionOfRDDThisJob = new mutable.HashSet[Int]
     var totalAccessNumber = 0
     var newInMemoryRDD = new mutable.HashSet[Int]
@@ -681,7 +682,7 @@ class DAGScheduler(
 
     def notRelatedRDD(rdd: Int): Boolean = {
       var flag = true
-      for (dep <- nodeAndParents(rdd)) {
+      for (dep <- nodeAndParents.getOrElse(rdd, mutable.HashSet[Int]())) {
         if (collectionOfRDDThisJob.contains(dep) ) {
           flag = false
         }
