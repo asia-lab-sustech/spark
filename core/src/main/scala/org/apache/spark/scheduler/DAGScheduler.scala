@@ -724,7 +724,7 @@ class DAGScheduler(
         traceSet += child
       }
 
-      for ( grandChild <- nodeAndChildren(child)) {
+      for ( grandChild <- nodeAndChildren.getOrElse(child, mutable.HashSet())) {
         goDeepest(grandChild, traceSet)
       }
     }
@@ -755,16 +755,19 @@ class DAGScheduler(
       DAGInfoMap(rddid) ++= traceArray(rddid).map(reuseinterval => (reuseinterval, 1))
         .groupBy(_._1)
         .map(l => (l._1, l._2.map(_._2).reduce(_+_)))
-    }
-
-    if (newInMemoryRDD.size > 0) {
-      for (can <- newInMemoryRDD) {
-        logWarning(s"Leasing: drop new in memory RDD: " + can)
-        if (DAGInfoMap.contains(can)) {
-          DAGInfoMap -= can
-        }
+      if (DAGInfoMap(rddid).isEmpty) {
+        DAGInfoMap -= rddid
       }
     }
+
+//    if (newInMemoryRDD.size > 0) {
+//      for (can <- newInMemoryRDD) {
+//        logWarning(s"Leasing: drop new in memory RDD: " + can)
+//        if (DAGInfoMap.contains(can)) {
+//          DAGInfoMap -= can
+//        }
+//      }
+//    }
 
     logWarning(s"Leasing: Total Memory Access Number is $totalAccessNumber")
     logWarning(s"Leasing: Trace of $jobId is $DAGInfoMap")
