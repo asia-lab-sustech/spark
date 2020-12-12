@@ -608,13 +608,13 @@ class DAGScheduler(
 
   // the Node that has been visited
   private var visitedRDDs = new HashSet[Int]
+  val nodeAndChildren = new HashMap[Int, mutable.HashSet[Int]]
+  val nodeAndParents = new HashMap[Int, mutable.HashSet[Int]]
 
   private def profileDAGThisJob(rdd: RDD[_], jobId: Int): Unit = {
     logWarning("Leasing: profiling " + jobId + "rdd: " + rdd.id + " " + rdd.getStorageLevel.useMemory)
    // val DAGInfoByJob = new mutable.HashMap[Int, HashMap[Int, Int]] // RddId => HashMap(reuseInterval, Frequency)
 
-    val nodeAndChildren = new HashMap[Int, mutable.HashSet[Int]]
-    val nodeAndParents = new HashMap[Int, mutable.HashSet[Int]]
     val collectionOfRDDThisJob = new mutable.HashSet[Int]
     var totalAccessNumber = 0
     var newInMemoryRDD = new mutable.HashSet[Int]
@@ -709,7 +709,7 @@ class DAGScheduler(
     def computable(node: Int, traceSet: mutable.ArrayBuffer[Int]) = {
       logWarning(s"Leasing: verify the computbility of $node")
       var flag = true
-      for (parent <- nodeAndParents(node)) {
+      for (parent <- nodeAndParents.getOrElse(node, mutable.ArrayBuffer())) {
         if (!traceSet.contains(parent)) {
           if (!notRelatedRDD(parent)) {
             flag = false
@@ -739,7 +739,7 @@ class DAGScheduler(
       }
     }
     logWarning(s"Leasing: goDeepest out!!")
-    logWarning(s"Leasing: RDDs of this job is $nodeAndChildren.keySet")
+    logWarning(s"Leasing: RDDs of this job is "+ nodeAndChildren.keySet)
     val DAGInfoMap = new HashMap[Int, HashMap[Int, Int]] // rddid => (reuseInterval=> frequency)
     for (rdd <- nodeAndChildren.keySet) {
       DAGInfoMap.put(rdd, new HashMap[Int, Int])
