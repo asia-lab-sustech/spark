@@ -153,6 +153,12 @@ private[spark] class BlockManager(
   var refProfile = mutable.HashMap[Int, Int]() // yyh
   var refProfile_by_Job = mutable.HashMap[Int, mutable.HashMap[Int, Int]]() // job refProfile profiled offline
   var refProfile_online = mutable.HashMap[Int, Int]() // refProfile maintained online
+
+  var DAGProfile = mutable.HashMap[Int, Int]()
+  var DAGProfile_by_Job = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
+  var DAGProfile_Online = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
+
+
   // Be careful that refProfile_online is replaced once a new job is submitted: no parallel jobs!
   var peers = mutable.HashMap[Int, Int]()
   var peerLostBlocks = new mutable.MutableList[BlockId] // yyh for all-or-nothing property
@@ -241,6 +247,17 @@ private[spark] class BlockManager(
       master.driverEndpoint.askWithRetry[Boolean](BlockWithPeerEvicted(blockId))
     }
 
+  }
+
+
+  def updateDAGInfo(jobID: Int, DAGInfo: Option[HashMap[Int, HashMap[Int, Int]]], AccessNumber: Int):
+  (mutable.HashMap[BlockId, mutable.HashMap[Int, Int]], mutable.HashMap[BlockId, mutable.HashMap[Int, Int]], Int) = {
+    var this_job = new mutable.HashMap[Int, HashMap[Int, Int]]
+    var accessNumberThisJob = 0
+
+
+    memoryStore.updateDAGInfoThisJob(DAGInfo.get, AccessNumber)
+    (memoryStore.currentDAGInfoMap, memoryStore.DAGInfoMap, AccessNumber)
   }
 
 

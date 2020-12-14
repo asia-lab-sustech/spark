@@ -24,6 +24,7 @@ import org.apache.spark.util.Utils
 
 import scala.collection.immutable.List
 import scala.collection.mutable
+import scala.collection.mutable.HashMap
 
 private[spark] object BlockManagerMessages {
   //////////////////////////////////////////////////////////////////////////////////
@@ -46,6 +47,10 @@ private[spark] object BlockManagerMessages {
     extends ToBlockManagerSlave
   // Broadcast JobDAG to slaves. yyh
   case class BroadcastJobDAG(jobId: Int, jobDAG: Option[mutable.HashMap[Int, Int]])
+    extends ToBlockManagerSlave
+
+  case class BroadcastDAGInfo(jobId: Int, DAGInfo: Option[mutable.HashMap[Int, mutable.HashMap[Int, Int]]],
+                              AccessNumber: Int)
     extends ToBlockManagerSlave
 
   // yyh: on evict a block, update the ref count of its peers
@@ -133,6 +138,11 @@ private[spark] object BlockManagerMessages {
   // Initiate broadcast of refcount
   case class StartBroadcastRefCount(jobId: Int, partitionNumber: Int,
                                     refCount: mutable.HashMap[Int, Int])
+    extends ToBlockManagerMaster
+
+  // Leasing:
+  case class StartBroadcastDAGInfo(jobId: Int, partitionNumber: Int,
+                                   DAGInfo: HashMap[Int, HashMap[Int, Int]], AccessNumber: Int)
     extends ToBlockManagerMaster
 
   // yyh: report the cache hit and miss to the master on stop of the block manager on slaves

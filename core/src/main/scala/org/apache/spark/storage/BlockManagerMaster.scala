@@ -23,7 +23,7 @@ import scala.concurrent.Future
 import org.apache.spark.{SparkConf, SparkException}
 import org.apache.spark.internal.Logging
 import org.apache.spark.rpc.RpcEndpointRef
-import org.apache.spark.storage.BlockManagerMessages.{BlockWithPeerEvicted, GetRefProfile, ReportCacheHit, StartBroadcastJobId, StartBroadcastRefCount, _}
+import org.apache.spark.storage.BlockManagerMessages.{BlockWithPeerEvicted, GetRefProfile, ReportCacheHit, StartBroadcastJobId, StartBroadcastRefCount, BroadcastDAGInfo, _}
 import org.apache.spark.util.{RpcUtils, ThreadUtils}
 
 import scala.collection.immutable.List
@@ -240,6 +240,10 @@ class BlockManagerMaster(
     (blockManagerId, slaveEndPoint))
   }
 
+
+  def getDAGInfoProfile(blockManagerId: BlockManagerId, slaveEndpoint: BlockManagerSlaveEndpoint):
+  (mutable.HashMap[])
+
   /**
    * yyh report the current ref map to the driver. For debug
    */
@@ -276,6 +280,11 @@ class BlockManagerMaster(
   /** Broadcast reference count */
   def broadcastRefCount(jobId: Int, partitionNumber: Int, refCount: HashMap[Int, Int]): Unit = {
     tell(StartBroadcastRefCount(jobId, partitionNumber, refCount))
+  }
+
+  /** Start Broadcast the Daginfo */
+  def broadcastDAGInfo(jobId: Int, partitionNumber: Int,  DAGInfo: HashMap[Int, HashMap[Int, Int]], AccessNumber: Int) : Unit = {
+    tell(StartBroadcastDAGInfo(jobId, partitionNumber, DAGInfo, AccessNumber))
   }
 
 

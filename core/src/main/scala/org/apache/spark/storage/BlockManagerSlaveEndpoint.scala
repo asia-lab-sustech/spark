@@ -24,6 +24,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.rpc.{RpcCallContext, RpcEnv, ThreadSafeRpcEndpoint}
 import org.apache.spark.storage.BlockManagerMessages._
 import org.apache.spark.util.{ThreadUtils, Utils}
+import scala.collection.mutable.HashMap
 
 /**
  * An RpcEndpoint to take commands from the master to execute options. For example,
@@ -74,6 +75,10 @@ class BlockManagerSlaveEndpoint(
 
     case TriggerThreadDump =>
       context.reply(Utils.getThreadDump())
+
+    case BroadcastDAGInfo(jobId, a, b) =>
+      val (currentDAGInfo, daginfo, currentAccessNumber) = blockManager.updateDAGInfo(jobId, a, b)
+      context.reply((currentDAGInfo, daginfo, currentAccessNumber))
 
 
     case BroadcastJobDAG(jobId, jobDAG) => // yyh

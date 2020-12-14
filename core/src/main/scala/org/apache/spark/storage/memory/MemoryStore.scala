@@ -86,7 +86,12 @@ private[spark] class MemoryStore(
   extends Logging {
 
   // Note: all changes to memory allocations, notably putting blocks, evicting blocks, and
-  // acquiring or releasing unroll memory, must be synchronized on `memoryManager`!
+  // acquiring or releasing unroll memory, ```must be synchronized on `memoryManager`!
+
+  // leasing:
+  var DAGInfoMap = mutable.HashMap[BlockId, mutable.HashMap[Int, Int]]()
+  var currentDAGInfoMap = mutable.HashMap[BlockId, mutable.HashMap[Int, Int]]()
+  var AccessNumberGlobal = 0
 
   private val entries = new LinkedHashMap[BlockId, MemoryEntry[_]](32, 0.75f, true)
   var refMap = mutable.HashMap[BlockId, Int]()  // yyh no recency. remaining refCount of
@@ -875,6 +880,11 @@ private[spark] class MemoryStore(
     // For an RDD to be used in the next job, its origin ref count might be 1.
   }
 
+  private def updateDAGFilter(blockId: BlockId, origin: mutable.HashMap[Int, Int], daginfo: mutable.HashMap[Int, mutable.HashMap[Int, Int]]) = {
+    val rddId = blockId.asRDDId.toString.split("_")(1).toInt
+    daginfo.getOrElse(rddId, origin)
+  }
+
 
   /**
   Update both refMap and currentRefMap with the received jobDAG in BlockManager
@@ -893,6 +903,29 @@ private[spark] class MemoryStore(
     logInfo(s"yyh: after: currentRefMap: $currentRefMap")
 
   }
+
+  /**
+   Update the DAGInfo for this Job. the DAGInfo is from the BlockManager
+   *
+   **/
+  def updateDAGInfoThisJob(DAGInfo: mutable.HashMap[Int, mutable.HashMap[Int, Int]], accessNumber: Int): Unit = {
+    logWarning(s"Leasing: Update DAGInfo on receiveing jobDAG $DAGInfo")
+
+    logInfo(s"yyh: before: currentRefMap: $currentDAGInfoMap")
+    DAGInfoMap.synchronized {
+      for ((blockid, riAndfreq) <- DAGInfoMap) {
+        DAGInfoMap(blockid) = updateDAGFilter(blockid, riAndfreq, DAGInfo)
+      }
+    }
+
+    currentDAGInfoMap.synchronized {
+      for ( (blockid, riAndfreq) <- DAGInfoMap) {
+        currentDAGInfoMap(blockid) = updateDAGFilter(blockid, riAndfreq, DAGInfo)
+      }
+    }
+    logInfo(s"yyh: after: currentRefMap: $currentRefMap")
+  }
+
 
   /**
    * Log a warning for failing to unroll a block.

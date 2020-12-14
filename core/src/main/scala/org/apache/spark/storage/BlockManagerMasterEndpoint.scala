@@ -33,6 +33,7 @@ import org.apache.spark.storage.BlockManagerMessages._
 import org.apache.spark.util.{ThreadUtils, Utils}
 
 import scala.collection.immutable.List
+import scala.collection.mutable.HashMap
 import scala.io.Source
 
 /**
@@ -206,6 +207,9 @@ class BlockManagerMasterEndpoint(
       broadcastJobDAG(jobId, partitionNumber, refCount)
       context.reply(true)
 
+    case StartBroadcastDAGInfo(jobId, partitionNumber, a, b) =>
+      broadcastDAGInfo(jobId, partitionNumber, a, b)
+      context.reply(true)
   }
 
   private def removeRdd(rddId: Int): Future[Seq[Int]] = {
@@ -501,6 +505,17 @@ class BlockManagerMasterEndpoint(
     }
     // update the total reference count.
     this.synchronized{totalReference += refCount.foldLeft(0)(_ + _._2) * partitionNumber}
+  }
+
+  private def broadcastDAGInfo(jobId: Int, partitionNumber: Int,
+                               DAGInfo: HashMap[Int, HashMap[Int, Int]], AccessNumber: Int): Unit = {
+    logWarning(s"Leasing: Start to broadcast the DAGInfo of Job $jobId")
+    logWarning(s"Leasing: DAGInfo: $DAGInfo")
+    for (bm <- blockManagerInfo.values) {
+      val (currentDAGInfo, dagInfo, currentAccessnumber) = bm.slaveEndpoint.askWithRetry[(mutable.HashMap[BlockId, mutable.HashMap[Int, Int]], mutable.HashMap[BlockId,
+        mutable.HashMap[Int, Int]], Int)](BroadcastDAGInfo(jobId, Some(DAGInfo), AccessNumber))
+      logInfo(s"Leasing: Update Current")
+    }
   }
 
   /**
