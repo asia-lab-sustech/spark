@@ -241,8 +241,6 @@ class BlockManagerMaster(
   }
 
 
-  def getDAGInfoProfile(blockManagerId: BlockManagerId, slaveEndpoint: BlockManagerSlaveEndpoint):
-  (mutable.HashMap[])
 
   /**
    * yyh report the current ref map to the driver. For debug

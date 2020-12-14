@@ -196,6 +196,7 @@ private[spark] class BlockManager(
     master.registerBlockManager(blockManagerId, maxMemory, slaveEndpoint)
     logInfo(s"LRC: block manager $blockManagerId has been registered, now try to get refProfile")
     val (appDAG, jobDAG, peerProfile) = master.getRefProfile(blockManagerId, slaveEndpoint)
+    logWarning(s"LRC: appDAG: $jobDAG")
     // yyh: we can't assign values to a var tuple. Use val tuple instead.
     refProfile = mutable.HashMap(appDAG.toSeq: _*)
     refProfile_by_Job = mutable.HashMap(jobDAG.toSeq: _*)
