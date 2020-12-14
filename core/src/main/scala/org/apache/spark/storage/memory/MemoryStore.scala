@@ -911,7 +911,7 @@ private[spark] class MemoryStore(
   def updateDAGInfoThisJob(DAGInfo: mutable.HashMap[Int, mutable.HashMap[Int, Int]], accessNumber: Int): Unit = {
     logWarning(s"Leasing: Update DAGInfo on receiveing jobDAG $DAGInfo")
 
-    logInfo(s"yyh: before: currentRefMap: $currentDAGInfoMap")
+    logWarning(s"Leasing: before: currentRefMap: $currentDAGInfoMap , access number: $accessNumber ")
     DAGInfoMap.synchronized {
       for ((blockid, riAndfreq) <- DAGInfoMap) {
         DAGInfoMap(blockid) = updateDAGFilter(blockid, riAndfreq, DAGInfo)
@@ -923,7 +923,8 @@ private[spark] class MemoryStore(
         currentDAGInfoMap(blockid) = updateDAGFilter(blockid, riAndfreq, DAGInfo)
       }
     }
-    logInfo(s"yyh: after: currentRefMap: $currentRefMap")
+    AccessNumberGlobal = accessNumber
+    logWarning(s"Leasing: after: currentRefMap: $currentRefMap , access number: $accessNumber ")
   }
 
 
