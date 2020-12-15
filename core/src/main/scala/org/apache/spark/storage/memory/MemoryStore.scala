@@ -19,7 +19,7 @@ package org.apache.spark.storage.memory
 
 import java.io.OutputStream
 import java.nio.ByteBuffer
-import java.util.LinkedHashMap
+import java.util.{LinkedHashMap, UUID}
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -29,7 +29,7 @@ import org.apache.spark.{SparkConf, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.memory.{MemoryManager, MemoryMode}
 import org.apache.spark.serializer.{SerializationStream, SerializerManager}
-import org.apache.spark.storage.{BlockId, BlockInfoManager, BlockManager, RDDBlockId, StorageLevel}
+import org.apache.spark.storage.{BlockId, BlockInfoManager, BlockManager, RDDBlockId, StorageLevel, TempLocalBlockId, TestBlockId}
 import org.apache.spark.unsafe.Platform
 import org.apache.spark.util.{SizeEstimator, Utils}
 import org.apache.spark.util.collection.SizeTrackingVector
@@ -92,6 +92,99 @@ private[spark] class MemoryStore(
   var DAGInfoMap = mutable.HashMap[BlockId, mutable.HashMap[Int, Int]]()
   var currentDAGInfoMap = mutable.HashMap[BlockId, mutable.HashMap[Int, Int]]()
   var AccessNumberGlobal = 0
+  private def totalNumberOfDataBlocks = DAGInfoMap.size
+
+  private val leaseMap = mutable.HashMap[BlockId, Int]()
+
+
+  // Require M -- Total number of data blocks =>  total Number of RDD for this job => DAGInfoMap.size
+  // Require R -- Max. distinct reuse intervals per block => DAGInfoMap(rddId).size - 1
+    // IMPORTANT!!:: Here we need to reduce the number by 1 since it is the worst case
+  // Require RI[1...M][1...R]  -- Reuse Interval histogram.  => DAGInfoMap
+
+  def HITS(blockId: BlockId, maxRi: Int): Int = {
+
+    var hit = 0
+    for ( (ri , freq) <- DAGInfoMap.getOrElse(blockId, mutable.HashMap[Int, Int]()) ) {
+      if (ri <= maxRi) {
+        hit += freq
+      }
+    }
+    hit
+  }
+
+  def COST(blockId: BlockId, lease: Int): Int = {
+
+    var upper = 0
+    var lower = 0
+    for ( (ri, freq) <- DAGInfoMap.getOrElse(blockId, mutable.HashMap[Int, Int]()) ) {
+      if ( ri <= lease ) {
+        upper += ri * freq
+      } else {
+        lower += lease * freq
+      }
+    }
+    upper + lower
+  }
+
+  private def getPPUC(blockId: BlockId, oldLease: Int, newLease: Int): Double = {
+    if (COST(blockId, newLease) - COST(blockId, newLease) != 0) {
+       (HITS(blockId, newLease) - HITS(blockId, oldLease)) / (COST(blockId, newLease) - COST(blockId, newLease))
+    } else {
+       0
+    }
+  }
+
+  /*
+  * @Require: M -- Total number of data blocks -- totalNumberOfDataBlocks
+  * @Require: N -- Total number of access -- AccessNumberGlobal
+  * @Require: R -- Max. distinct reuse intervals per block => DAGInfoMap(rddId).size - 1
+  * @Require: RI -- reuse interval histograms => DAGInfoMap
+  * @Require: C -- Target cache size  => maximum cache size => maxMemory
+  * @Ensure: L -- Assigned leases => leaseMap
+  * */
+  def OSL():Unit = {
+
+    def maxPPUC(): (Boolean, BlockId, Int) = {
+      var bestPPUC = 0.0
+      var bestBlock = (true, new TestBlockId("test").asInstanceOf[BlockId], 0)
+      var reuse = 0
+      var ppuc = 0.0
+      for (block <- DAGInfoMap.keySet) {
+        for ( (ri, freq) <- DAGInfoMap(block) ) {
+          if (freq > leaseMap.getOrElseUpdate(block, 0)) {
+            reuse = freq
+            ppuc = getPPUC(block, leaseMap(block), reuse)
+            if (ppuc > bestPPUC) {
+              bestPPUC = ppuc
+              bestBlock = (false, block, reuse)
+            }
+          }
+        }
+      }
+       bestBlock
+    }
+
+    for ((block, _) <- DAGInfoMap) {
+      leaseMap(block) = 0
+    }
+
+    var totalCost : Long = 0
+    val targetCost = maxMemory * AccessNumberGlobal // here we do not apply the target cache size, instead we use the total case size
+    // to constrain the lease
+
+    while (totalCost <= targetCost) {
+      var (finished, block, newLease) = maxPPUC()
+      if (!finished) {
+        val oldLease = leaseMap(block)
+        val cost = COST(block, newLease) - COST(block, oldLease)
+        totalCost = totalCost + cost
+        leaseMap(block) = newLease
+      } else {
+        return
+      }
+    }
+  }
 
   private val entries = new LinkedHashMap[BlockId, MemoryEntry[_]](32, 0.75f, true)
   var refMap = mutable.HashMap[BlockId, Int]()  // yyh no recency. remaining refCount of
@@ -911,7 +1004,7 @@ private[spark] class MemoryStore(
   def updateDAGInfoThisJob(DAGInfo: mutable.HashMap[Int, mutable.HashMap[Int, Int]], accessNumber: Int): Unit = {
     logWarning(s"Leasing: Update DAGInfo on receiveing jobDAG $DAGInfo")
 
-    logWarning(s"Leasing: before: currentRefMap: $currentDAGInfoMap , access number: $accessNumber ")
+    logWarning(s"Leasing: before: currentDAGInfoMap: $currentDAGInfoMap , access number: $accessNumber ")
     DAGInfoMap.synchronized {
       for ((blockid, riAndfreq) <- DAGInfoMap) {
         DAGInfoMap(blockid) = updateDAGFilter(blockid, riAndfreq, DAGInfo)
@@ -924,7 +1017,11 @@ private[spark] class MemoryStore(
       }
     }
     AccessNumberGlobal = accessNumber
-    logWarning(s"Leasing: after: currentRefMap: $currentRefMap , access number: $accessNumber ")
+    logWarning(s"Leasing: after: currentDAGInfoMap: $currentDAGInfoMap , access number: $accessNumber ")
+
+    logWarning(s"Leasing: before OSL, leaseMAP $leaseMap")
+    OSL()
+    logWarning(s"Leasing: after OSL, leaseMAP $leaseMap")
   }
 
 
