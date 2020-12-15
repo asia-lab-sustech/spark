@@ -89,12 +89,12 @@ private[spark] class MemoryStore(
   // acquiring or releasing unroll memory, ```must be synchronized on `memoryManager`!
 
   // leasing:
-  var DAGInfoMap = mutable.HashMap[BlockId, mutable.HashMap[Int, Int]]()
-  var currentDAGInfoMap = mutable.HashMap[BlockId, mutable.HashMap[Int, Int]]()
+  var DAGInfoMap = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
+  var currentDAGInfoMap = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
   var AccessNumberGlobal = 0
   private def totalNumberOfDataBlocks = DAGInfoMap.size
 
-  private val leaseMap = mutable.HashMap[BlockId, Int]()
+  private val leaseMap = mutable.HashMap[Int, Int]()
 
 
   // Require M -- Total number of data blocks =>  total Number of RDD for this job => DAGInfoMap.size
@@ -102,10 +102,10 @@ private[spark] class MemoryStore(
     // IMPORTANT!!:: Here we need to reduce the number by 1 since it is the worst case
   // Require RI[1...M][1...R]  -- Reuse Interval histogram.  => DAGInfoMap
 
-  def HITS(blockId: BlockId, maxRi: Int): Int = {
+  def HITS(rddid: Int, maxRi: Int): Int = {
 
     var hit = 0
-    for ( (ri , freq) <- DAGInfoMap.getOrElse(blockId, mutable.HashMap[Int, Int]()) ) {
+    for ( (ri , freq) <- DAGInfoMap.getOrElse(rddid, mutable.HashMap[Int, Int]()) ) {
       if (ri <= maxRi) {
         hit += freq
       }
@@ -113,11 +113,11 @@ private[spark] class MemoryStore(
     hit
   }
 
-  def COST(blockId: BlockId, lease: Int): Int = {
+  def COST(rddid: Int, lease: Int): Int = {
 
     var upper = 0
     var lower = 0
-    for ( (ri, freq) <- DAGInfoMap.getOrElse(blockId, mutable.HashMap[Int, Int]()) ) {
+    for ( (ri, freq) <- DAGInfoMap.getOrElse(rddid, mutable.HashMap[Int, Int]()) ) {
       if ( ri <= lease ) {
         upper += ri * freq
       } else {
@@ -127,9 +127,9 @@ private[spark] class MemoryStore(
     upper + lower
   }
 
-  private def getPPUC(blockId: BlockId, oldLease: Int, newLease: Int): Double = {
-    if (COST(blockId, newLease) - COST(blockId, newLease) != 0) {
-       (HITS(blockId, newLease) - HITS(blockId, oldLease)) / (COST(blockId, newLease) - COST(blockId, newLease))
+  private def getPPUC(rddid: Int, oldLease: Int, newLease: Int): Double = {
+    if (COST(rddid, newLease) - COST(rddid, newLease) != 0) {
+       (HITS(rddid, newLease) - HITS(rddid, oldLease)) / (COST(rddid, newLease) - COST(rddid, newLease))
     } else {
        0
     }
@@ -145,9 +145,9 @@ private[spark] class MemoryStore(
   * */
   def OSL():Unit = {
 
-    def maxPPUC(): (Boolean, BlockId, Int) = {
+    def maxPPUC(): (Boolean, Int, Int) = {
       var bestPPUC = 0.0
-      var bestBlock = (true, new TestBlockId("test").asInstanceOf[BlockId], 0)
+      var bestBlock = (true, 0, 0)
       var reuse = 0
       var ppuc = 0.0
       for (block <- DAGInfoMap.keySet) {
@@ -174,7 +174,7 @@ private[spark] class MemoryStore(
     // to constrain the lease
 
     while (totalCost <= targetCost) {
-      var (finished, block, newLease) = maxPPUC()
+      val (finished, block, newLease) = maxPPUC()
       if (!finished) {
         val oldLease = leaseMap(block)
         val cost = COST(block, newLease) - COST(block, oldLease)
@@ -319,6 +319,19 @@ private[spark] class MemoryStore(
       }
     }
 
+    if (blockId.isRDD) {
+      val rddId = blockId.asRDDId.toString.split("_")(1).toInt
+      if (DAGInfoMap.contains(rddId)) {
+        logWarning(s"Leasing: the to unrolled block is already in the DAG map")
+      } else if (blockManager.DAGProfile_Online.contains(rddId)) {
+        val ri = blockManager.DAGProfile_Online(rddId)
+        DAGInfoMap.synchronized {DAGInfoMap(rddId) = ri}
+      } else {
+        DAGInfoMap.synchronized {DAGInfoMap.put(rddId, new mutable.HashMap[Int, Int]())}
+        logError(s"Leasing: the unrolled block $blockId from $rddId is not in the DAGmap")
+      }
+    }
+
 
     // Request enough memory to begin unrolling
     keepUnrolling =
@@ -404,6 +417,20 @@ private[spark] class MemoryStore(
       }
 
 
+      if (blockId.isRDD) {
+        val rddId = blockId.asRDDId.toString.split("_")(1).toInt
+        if (DAGInfoMap.contains(rddId)) {
+          logWarning(s"Leasing: the to be cached block is already in the DAG map")
+        } else if (blockManager.DAGProfile_Online.contains(rddId)) {
+          val ri = blockManager.DAGProfile_Online(rddId)
+          DAGInfoMap.synchronized {DAGInfoMap(rddId) = ri}
+        } else {
+          DAGInfoMap.synchronized {DAGInfoMap.put(rddId, new mutable.HashMap[Int, Int]())}
+          logError(s"Leasing: the unrolled block $blockId from $rddId is not in the DAGmap")
+        }
+      }
+
+
       if (enoughStorageMemory) {
         entries.synchronized {
           entries.put(blockId, entry)
@@ -413,6 +440,12 @@ private[spark] class MemoryStore(
             currentRefMap.put(blockId, refMap(blockId))
             val ref_count = refMap(blockId)
             logInfo(s"LRC: put $blockId in current ref map: $ref_count")
+          }
+        }
+        if (blockId.isRDD) {
+          currentDAGInfoMap.synchronized {
+            val rddid = blockId.asRDDId.toString.split("_")(1).toInt
+            currentDAGInfoMap.put(rddid, DAGInfoMap(rddid))
           }
         }
         logInfo("Block %s stored as values in memory (estimated size %s, free %s)".format(
@@ -973,9 +1006,8 @@ private[spark] class MemoryStore(
     // For an RDD to be used in the next job, its origin ref count might be 1.
   }
 
-  private def updateDAGFilter(blockId: BlockId, origin: mutable.HashMap[Int, Int], daginfo: mutable.HashMap[Int, mutable.HashMap[Int, Int]]) = {
-    val rddId = blockId.asRDDId.toString.split("_")(1).toInt
-    daginfo.getOrElse(rddId, origin)
+  private def updateDAGFilter(blockId: Int, origin: mutable.HashMap[Int, Int], daginfo: mutable.HashMap[Int, mutable.HashMap[Int, Int]]) = {
+    daginfo.getOrElse(blockId, origin)
   }
 
 
@@ -1006,13 +1038,13 @@ private[spark] class MemoryStore(
 
     logWarning(s"Leasing: before: currentDAGInfoMap: $currentDAGInfoMap , access number: $accessNumber ")
     DAGInfoMap.synchronized {
-      for ((blockid, riAndfreq) <- DAGInfoMap) {
-        DAGInfoMap(blockid) = updateDAGFilter(blockid, riAndfreq, DAGInfo)
+      for ((blockid, riAndfreq) <- DAGInfo) {
+        DAGInfoMap.put(blockid, updateDAGFilter(blockid, riAndfreq, DAGInfo))
       }
     }
 
     currentDAGInfoMap.synchronized {
-      for ( (blockid, riAndfreq) <- DAGInfoMap) {
+      for ( (blockid, riAndfreq) <- DAGInfo) {
         currentDAGInfoMap(blockid) = updateDAGFilter(blockid, riAndfreq, DAGInfo)
       }
     }

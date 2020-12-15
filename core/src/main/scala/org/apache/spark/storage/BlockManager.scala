@@ -252,10 +252,18 @@ private[spark] class BlockManager(
 
 
   def updateDAGInfo(jobID: Int, DAGInfo: Option[HashMap[Int, HashMap[Int, Int]]], AccessNumber: Int):
-  (mutable.HashMap[BlockId, mutable.HashMap[Int, Int]], mutable.HashMap[BlockId, mutable.HashMap[Int, Int]], Int) = {
+  (mutable.HashMap[Int, mutable.HashMap[Int, Int]], mutable.HashMap[Int, mutable.HashMap[Int, Int]], Int) = {
     var this_job = new mutable.HashMap[Int, HashMap[Int, Int]]
     var accessNumberThisJob = 0
 
+    if (DAGInfo.isDefined) {
+      logWarning(s"Leasing: received DAGInfo of job $jobID: $DAGInfo")
+      this_job = DAGInfo.get
+    } else {
+      logWarning(s"Leasing: do NOT receive DAGInfo of job $jobID: $DAGInfo")
+    }
+
+    DAGProfile_Online ++= this_job
 
     memoryStore.updateDAGInfoThisJob(DAGInfo.get, AccessNumber)
     (memoryStore.currentDAGInfoMap, memoryStore.DAGInfoMap, AccessNumber)
