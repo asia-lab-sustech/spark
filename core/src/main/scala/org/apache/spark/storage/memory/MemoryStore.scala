@@ -150,8 +150,8 @@ private[spark] class MemoryStore(
       var bestBlock = (true, 0, 0)
       var reuse = 0
       var ppuc = 0.0
-      for (block <- DAGInfoMap.keySet) {
-        for ( (ri, freq) <- DAGInfoMap(block) ) {
+      for (block <- currentDAGInfoMap.keySet) {
+        for ( (ri, freq) <- currentDAGInfoMap(block) ) {
           if (freq > leaseMap.getOrElseUpdate(block, 0)) {
             reuse = freq
             ppuc = getPPUC(block, leaseMap(block), reuse)
@@ -319,18 +319,18 @@ private[spark] class MemoryStore(
       }
     }
 
-    if (blockId.isRDD) {
-      val rddId = blockId.asRDDId.toString.split("_")(1).toInt
-      if (DAGInfoMap.contains(rddId)) {
-        logWarning(s"Leasing: the to unrolled block is already in the DAG map")
-      } else if (blockManager.DAGProfile_Online.contains(rddId)) {
-        val ri = blockManager.DAGProfile_Online(rddId)
-        DAGInfoMap.synchronized {DAGInfoMap(rddId) = ri}
-      } else {
-        DAGInfoMap.synchronized {DAGInfoMap.put(rddId, new mutable.HashMap[Int, Int]())}
-        logError(s"Leasing: the unrolled block $blockId from $rddId is not in the DAGmap")
-      }
-    }
+//    if (blockId.isRDD) {
+//      val rddId = blockId.asRDDId.toString.split("_")(1).toInt
+//      if (DAGInfoMap.contains(rddId)) {
+//        logWarning(s"Leasing: the to unrolled block is already in the DAG map")
+//      } else if (blockManager.DAGProfile_Online.contains(rddId)) {
+//        val ri = blockManager.DAGProfile_Online(rddId)
+//        DAGInfoMap.synchronized {DAGInfoMap(rddId) = ri}
+//      } else {
+//        DAGInfoMap.synchronized {DAGInfoMap.put(rddId, new mutable.HashMap[Int, Int]())}
+//        logError(s"Leasing: the unrolled block $blockId from $rddId is not in the DAGmap")
+//      }
+//    }
 
 
     // Request enough memory to begin unrolling
@@ -417,18 +417,18 @@ private[spark] class MemoryStore(
       }
 
 
-      if (blockId.isRDD) {
-        val rddId = blockId.asRDDId.toString.split("_")(1).toInt
-        if (DAGInfoMap.contains(rddId)) {
-          logWarning(s"Leasing: the to be cached block is already in the DAG map")
-        } else if (blockManager.DAGProfile_Online.contains(rddId)) {
-          val ri = blockManager.DAGProfile_Online(rddId)
-          DAGInfoMap.synchronized {DAGInfoMap(rddId) = ri}
-        } else {
-          DAGInfoMap.synchronized {DAGInfoMap.put(rddId, new mutable.HashMap[Int, Int]())}
-          logError(s"Leasing: the unrolled block $blockId from $rddId is not in the DAGmap")
-        }
-      }
+//      if (blockId.isRDD) {
+//        val rddId = blockId.asRDDId.toString.split("_")(1).toInt
+//        if (DAGInfoMap.contains(rddId)) {
+//          logWarning(s"Leasing: the to be cached block is already in the DAG map")
+//        } else if (blockManager.DAGProfile_Online.contains(rddId)) {
+//          val ri = blockManager.DAGProfile_Online(rddId)
+//          DAGInfoMap.synchronized {DAGInfoMap(rddId) = ri}
+//        } else {
+//          DAGInfoMap.synchronized {DAGInfoMap.put(rddId, new mutable.HashMap[Int, Int]())}
+//          logError(s"Leasing: the unrolled block $blockId from $rddId is not in the DAGmap")
+//        }
+//      }
 
 
       if (enoughStorageMemory) {
@@ -442,12 +442,12 @@ private[spark] class MemoryStore(
             logInfo(s"LRC: put $blockId in current ref map: $ref_count")
           }
         }
-        if (blockId.isRDD) {
-          currentDAGInfoMap.synchronized {
-            val rddid = blockId.asRDDId.toString.split("_")(1).toInt
-            currentDAGInfoMap.put(rddid, DAGInfoMap(rddid))
-          }
-        }
+//        if (blockId.isRDD) {
+//          currentDAGInfoMap.synchronized {
+//            val rddid = blockId.asRDDId.toString.split("_")(1).toInt
+//            currentDAGInfoMap.put(rddid, DAGInfoMap(rddid))
+//          }
+//        }
         logInfo("Block %s stored as values in memory (estimated size %s, free %s)".format(
           blockId, Utils.bytesToString(size), Utils.bytesToString(maxMemory - blocksMemoryUsed)))
         Right(size)
@@ -1037,6 +1037,7 @@ private[spark] class MemoryStore(
     logWarning(s"Leasing: Update DAGInfo on receiveing jobDAG $DAGInfo")
 
     logWarning(s"Leasing: before: currentDAGInfoMap: $currentDAGInfoMap , access number: $accessNumber ")
+    logWarning(s"Leasing: before: DAGInfoMap: $DAGInfoMap , access number: $accessNumber ")
     DAGInfoMap.synchronized {
       for ((blockid, riAndfreq) <- DAGInfo) {
         DAGInfoMap.put(blockid, updateDAGFilter(blockid, riAndfreq, DAGInfo))
@@ -1044,12 +1045,14 @@ private[spark] class MemoryStore(
     }
 
     currentDAGInfoMap.synchronized {
+      currentDAGInfoMap = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
       for ( (blockid, riAndfreq) <- DAGInfo) {
-        currentDAGInfoMap(blockid) = updateDAGFilter(blockid, riAndfreq, DAGInfo)
+        currentDAGInfoMap.put(blockid, updateDAGFilter(blockid, riAndfreq, DAGInfo))
       }
     }
     AccessNumberGlobal = accessNumber
     logWarning(s"Leasing: after: currentDAGInfoMap: $currentDAGInfoMap , access number: $accessNumber ")
+    logWarning(s"Leasing: after: DAGInfoMap: $DAGInfoMap , access number: $accessNumber ")
 
     logWarning(s"Leasing: before OSL, leaseMAP $leaseMap")
     OSL()
