@@ -563,6 +563,7 @@ private[spark] class BlockManager(
                   hitCount += 1
                 )
                 memoryStore.deductRefCountByBlockIdHit(blockId)
+                memoryStore.deductLease()
               }
           }
           result
@@ -576,6 +577,7 @@ private[spark] class BlockManager(
                 missCount += 1
               }
               memoryStore.deductRefCountByBlockIdMiss(blockId)
+              memoryStore.deductLease()
             }
           }
           val iterToReturn: Iterator[Any] = {

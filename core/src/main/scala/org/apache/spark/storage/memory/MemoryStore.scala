@@ -23,6 +23,7 @@ import java.util.{LinkedHashMap, UUID}
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
+import scala.collection.immutable.{Set, ListMap}
 import scala.reflect.ClassTag
 import com.google.common.io.ByteStreams
 import org.apache.spark.{SparkConf, TaskContext}
@@ -89,10 +90,13 @@ private[spark] class MemoryStore(
   // acquiring or releasing unroll memory, ```must be synchronized on `memoryManager`!
 
   // leasing:
-  var DAGInfoMap = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
+  var DAGInfoMap = mutable.HashMap[Int, mutable.HashMap[Int, Int]]() // we use DAGInfoMap only for calculating leasing
   var currentDAGInfoMap = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
+  var globalDAG = mutable.HashMap[Int, mutable.HashMap[Int, Int]] ()
   var AccessNumberGlobal = 0
-  private def totalNumberOfDataBlocks = DAGInfoMap.size
+
+  // total number of data block that woulb be reused
+  private def totalNumberOfDataBlocks = DAGInfoMap.count(kv => kv._2.nonEmpty)
 
   private val leaseMap = mutable.HashMap[Int, Int]()
 
@@ -102,7 +106,7 @@ private[spark] class MemoryStore(
     // IMPORTANT!!:: Here we need to reduce the number by 1 since it is the worst case
   // Require RI[1...M][1...R]  -- Reuse Interval histogram.  => DAGInfoMap
 
-  def HITS(rddid: Int, maxRi: Int): Int = {
+  def HITS(rddid: Int, maxRi: Int): Double = {
 
     var hit = 0
     for ( (ri , freq) <- DAGInfoMap.getOrElse(rddid, mutable.HashMap[Int, Int]()) ) {
@@ -113,7 +117,7 @@ private[spark] class MemoryStore(
     hit
   }
 
-  def COST(rddid: Int, lease: Int): Int = {
+  def COST(rddid: Int, lease: Int): Double = {
 
     var upper = 0
     var lower = 0
@@ -127,11 +131,11 @@ private[spark] class MemoryStore(
     upper + lower
   }
 
-  private def getPPUC(rddid: Int, oldLease: Int, newLease: Int): Double = {
-    if (COST(rddid, newLease) - COST(rddid, newLease) != 0) {
-       (HITS(rddid, newLease) - HITS(rddid, oldLease)) / (COST(rddid, newLease) - COST(rddid, newLease))
+   def getPPUC(rddid: Int, oldLease: Int, newLease: Int): Double = {
+    if (COST(rddid, newLease) - COST(rddid, oldLease) != 0) {
+       (HITS(rddid, newLease) - HITS(rddid, oldLease)) / (COST(rddid, newLease) - COST(rddid, oldLease))
     } else {
-       0
+       0.0
     }
   }
 
@@ -150,10 +154,10 @@ private[spark] class MemoryStore(
       var bestBlock = (true, 0, 0)
       var reuse = 0
       var ppuc = 0.0
-      for (block <- currentDAGInfoMap.keySet) {
-        for ( (ri, freq) <- currentDAGInfoMap(block) ) {
-          if (freq > leaseMap.getOrElseUpdate(block, 0)) {
-            reuse = freq
+      for (block <- DAGInfoMap.keySet) {
+        for ( (ri, freq) <- DAGInfoMap(block) ) {
+          if ( ri > leaseMap.getOrElseUpdate(block, 0)) {
+            reuse = ri
             ppuc = getPPUC(block, leaseMap(block), reuse)
             if (ppuc > bestPPUC) {
               bestPPUC = ppuc
@@ -169,8 +173,8 @@ private[spark] class MemoryStore(
       leaseMap(block) = 0
     }
 
-    var totalCost : Long = 0
-    val targetCost = maxMemory * AccessNumberGlobal // here we do not apply the target cache size, instead we use the total case size
+    var totalCost : Double = 0
+    val targetCost =  getAverageCacheSize * AccessNumberGlobal // here we do not apply the target cache size, instead we use the total case size
     // to constrain the lease
 
     while (totalCost <= targetCost) {
@@ -181,9 +185,32 @@ private[spark] class MemoryStore(
         totalCost = totalCost + cost
         leaseMap(block) = newLease
       } else {
+        println("Leasing Assign finished")
         return
       }
     }
+  }
+
+  // deduct the lease by one when access the cache
+  def deductLease() : Unit = {
+    logWarning(s"Leasing: Drop all lease by 1")
+    for ( (k,v) <- leaseMap ){
+      if ( currentDAGInfoMap.contains(k)) { // here we only deduct the lease that we have right now
+        leaseMap(k)  = if (v -1 >0) v - 1 else 0
+      }
+    }
+  }
+
+
+
+  // how many memory block can be cached over the last iteration
+  private def getAverageCacheSize: Long = {
+    var totalMem : Long = 0
+     if (!entries.isEmpty) {
+       entries.size()
+     } else {
+       DAGInfoMap.size * DAGInfoMap.size / DAGInfoMap.size
+     }
   }
 
   private val entries = new LinkedHashMap[BlockId, MemoryEntry[_]](32, 0.75f, true)
@@ -246,6 +273,34 @@ private[spark] class MemoryStore(
       _bytes: () => ChunkedByteBuffer): Boolean = {
     require(!contains(blockId), s"Block $blockId is already present in the MemoryStore")
     if (memoryManager.acquireStorageMemory(blockId, size, memoryMode)) {
+
+      if (blockId.isRDD) { // we only care about the ref count of rdd blocks
+        val rddId = blockId.asRDDId.toString.split("_")(1).toInt // yyh asRDDId: rdd_1_1
+        if (refMap.contains(blockId)){
+          logError(s"LRC: the to unrolled block is already in the ref map")
+        }
+        else if (blockManager.refProfile_online.contains(rddId)) {   // jobDAG
+          val ref_count = blockManager.refProfile_online(rddId)// jobDAG
+          refMap.synchronized { refMap(blockId) = ref_count}
+          logInfo(s"LRC: (Unrolling) fetch the ref count of $blockId: $ref_count")
+        }
+        else {
+          refMap.synchronized {refMap.put(blockId, 1)}
+          logError(s"LRC: the unrolled block $blockId is not in the ref profile")
+        }
+      }
+
+      if (blockId.isRDD) {
+        val rddId = blockId.asRDDId.toString.split("_")(1).toInt
+        if (DAGInfoMap.contains(rddId)) {
+          logWarning("Leasing: The to unrooled block, we got its RI")
+          currentDAGInfoMap.put(rddId, DAGInfoMap(rddId))
+        } else if (globalDAG.contains(rddId)) {
+          logWarning("Leasing: The to unrooled block, we got its RI from the global dag")
+          currentDAGInfoMap.put(rddId, globalDAG(rddId))
+        }
+      }
+
       // We acquired enough memory for the block, so go ahead and put it
       val bytes = _bytes()
       assert(bytes.size == size)
@@ -319,18 +374,16 @@ private[spark] class MemoryStore(
       }
     }
 
-//    if (blockId.isRDD) {
-//      val rddId = blockId.asRDDId.toString.split("_")(1).toInt
-//      if (DAGInfoMap.contains(rddId)) {
-//        logWarning(s"Leasing: the to unrolled block is already in the DAG map")
-//      } else if (blockManager.DAGProfile_Online.contains(rddId)) {
-//        val ri = blockManager.DAGProfile_Online(rddId)
-//        DAGInfoMap.synchronized {DAGInfoMap(rddId) = ri}
-//      } else {
-//        DAGInfoMap.synchronized {DAGInfoMap.put(rddId, new mutable.HashMap[Int, Int]())}
-//        logError(s"Leasing: the unrolled block $blockId from $rddId is not in the DAGmap")
-//      }
-//    }
+    if (blockId.isRDD) {
+      val rddId = blockId.asRDDId.toString.split("_")(1).toInt
+      if (DAGInfoMap.contains(rddId)) {
+        logWarning("Leasing: The to unrooled block, we got its RI")
+        currentDAGInfoMap.put(rddId, DAGInfoMap(rddId))
+      } else if (globalDAG.contains(rddId)) {
+        logWarning("Leasing: The to unrooled block, we got its RI from the global dag")
+        currentDAGInfoMap.put(rddId, globalDAG(rddId))
+      }
+    }
 
 
     // Request enough memory to begin unrolling
@@ -552,6 +605,34 @@ private[spark] class MemoryStore(
     }
 
     if (keepUnrolling) {
+
+      if (blockId.isRDD) { // we only care about the ref count of rdd blocks
+        val rddId = blockId.asRDDId.toString.split("_")(1).toInt // yyh asRDDId: rdd_1_1
+        if (refMap.contains(blockId)){
+          logError(s"LRC: the to unrolled block is already in the ref map")
+        }
+        else if (blockManager.refProfile_online.contains(rddId)) {   // jobDAG
+          val ref_count = blockManager.refProfile_online(rddId)// jobDAG
+          refMap.synchronized { refMap(blockId) = ref_count}
+          logInfo(s"LRC: (Unrolling) fetch the ref count of $blockId: $ref_count")
+        }
+        else {
+          refMap.synchronized {refMap.put(blockId, 1)}
+          logError(s"LRC: the unrolled block $blockId is not in the ref profile")
+        }
+      }
+
+      if (blockId.isRDD) {
+        val rddId = blockId.asRDDId.toString.split("_")(1).toInt
+        if (DAGInfoMap.contains(rddId)) {
+          logWarning("Leasing: The to unrooled block, we got its RI")
+          currentDAGInfoMap.put(rddId, DAGInfoMap(rddId))
+        } else if (globalDAG.contains(rddId)) {
+          logWarning("Leasing: The to unrooled block, we got its RI from the global dag")
+          currentDAGInfoMap.put(rddId, globalDAG(rddId))
+        }
+      }
+
       val entry = SerializedMemoryEntry[T](bbos.toChunkedByteBuffer, memoryMode, classTag)
       // Synchronize so that transfer is atomic
       memoryManager.synchronized {
@@ -623,6 +704,20 @@ private[spark] class MemoryStore(
         }
       }
     }
+
+    if (blockId.isRDD) {
+      currentDAGInfoMap.synchronized {
+        if (currentDAGInfoMap.contains(getRddId(blockId).get)) {
+          currentDAGInfoMap.remove(getRddId(blockId).get)
+        }
+      }
+      leaseMap.synchronized {
+        if (leaseMap.contains(getRddId(blockId).get)) {
+          leaseMap.remove(getRddId(blockId).get)
+        }
+      }
+    }
+
     if (entry != null) {
       entry match {
         case SerializedMemoryEntry(buffer, _, _) => buffer.dispose()
@@ -699,6 +794,7 @@ private[spark] class MemoryStore(
 //          }
 //        }
 //      }
+      ///!!!!!!!!!!!!!!!!!!!!!!!   Above is LRU
 
       var blockToCacheRefCount = Int.MaxValue
       // yyh: if this is a broadcast block, cache it anyway
@@ -722,8 +818,8 @@ private[spark] class MemoryStore(
       val listMap = ListMap(currentRefMap.toSeq.sortBy(_._2): _*)
       breakable {
         for ((thisBlockId, thisRefCount) <- listMap){
-          if (entries.containsKey(blockId) && blockIsEvictable(blockId.get, entries.get(blockId))) {
-            if (blockManager.blockInfoManager.lockForWriting(blockId.get, blocking = false).isDefined) {
+          if (entries.containsKey(thisBlockId) && blockIsEvictable(thisBlockId, entries.get(thisBlockId))) {
+            if (blockManager.blockInfoManager.lockForWriting(thisBlockId, blocking = false).isDefined) {
               if (thisRefCount < blockToCacheRefCount && freedMemory < space) {
                 selectedBlocks += thisBlockId
                 entries.synchronized {
@@ -739,6 +835,61 @@ private[spark] class MemoryStore(
         }
       }
       logInfo(s"LRC: To evict blocks $selectedBlocks")
+
+
+      var freedMemory2 = 0L
+      val selectedBlocks2 = new ArrayBuffer[BlockId]
+      currentDAGInfoMap.synchronized {
+        val BlocksDoNotHaveALease = entries
+          .keySet()
+          .asInstanceOf[Set[BlockId]]
+          .filter( x => !leaseMap.contains(x.asRDDId.toString.split("_")(1).toInt) )
+        breakable {
+          for ( thisblockId <- BlocksDoNotHaveALease) {
+            if (entries.containsKey(thisblockId) && blockIsEvictable(thisblockId, entries.get(thisblockId))) {
+              if (blockManager.blockInfoManager.lockForWriting(thisblockId, blocking = false).isDefined) {
+                if (freedMemory2 < space) {
+                  selectedBlocks2 += thisblockId
+                  entries.synchronized {
+                    freedMemory2 += entries.get(thisblockId).size
+                  }
+                } else {
+                  break
+                }
+              }
+            }
+          }
+          if (freedMemory2 < space) {
+            breakable {
+              for ( thisrddid <- ListMap(leaseMap.toSeq.sortBy(_._2): _*).keySet) {
+                if (currentDAGInfoMap.contains(thisrddid)) {
+                  entries.synchronized {
+                    val iterator = entries.entrySet().iterator()
+                    while (freedMemory2 < space && iterator.hasNext) {
+                      val pair = iterator.next()
+                      val blockId = pair.getKey
+                      val entry = pair.getValue
+                      val corddid = blockId.asRDDId.toString.split("_")(1).toInt
+                      if (thisrddid == corddid ) {
+                        if ( blockIsEvictable(blockId, entry)) {
+                          if (!selectedBlocks2.contains(blockId)) {
+                            selectedBlocks2 += blockId
+                            freedMemory2 += pair.getValue.size
+                          }
+                        }
+                      }
+                    }
+                  }
+                  if (freedMemory2 >= space) {
+                    break
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      logWarning(s"Leasing: The to evict block is $selectedBlocks2")
 
 
       def dropBlock[T](blockId: BlockId, entry: MemoryEntry[T]): Unit = {
@@ -1038,7 +1189,15 @@ private[spark] class MemoryStore(
 
     logWarning(s"Leasing: before: currentDAGInfoMap: $currentDAGInfoMap , access number: $accessNumber ")
     logWarning(s"Leasing: before: DAGInfoMap: $DAGInfoMap , access number: $accessNumber ")
+
+    globalDAG.synchronized {
+      for ((blockid, riAndfreq) <- DAGInfo) {
+        globalDAG.put(blockid, updateDAGFilter(blockid, riAndfreq, DAGInfo))
+      }
+    }
+
     DAGInfoMap.synchronized {
+      DAGInfoMap = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
       for ((blockid, riAndfreq) <- DAGInfo) {
         DAGInfoMap.put(blockid, updateDAGFilter(blockid, riAndfreq, DAGInfo))
       }
@@ -1046,10 +1205,11 @@ private[spark] class MemoryStore(
 
     currentDAGInfoMap.synchronized {
       currentDAGInfoMap = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
-      for ( (blockid, riAndfreq) <- DAGInfo) {
-        currentDAGInfoMap.put(blockid, updateDAGFilter(blockid, riAndfreq, DAGInfo))
-      }
+//      for ( (blockid, riAndfreq) <- DAGInfo) {
+//        currentDAGInfoMap.put(blockid, updateDAGFilter(blockid, riAndfreq, DAGInfo))
+//      }
     }
+    DAGInfoMap = DAGInfoMap.filter(kv => kv._2.nonEmpty)
     AccessNumberGlobal = accessNumber
     logWarning(s"Leasing: after: currentDAGInfoMap: $currentDAGInfoMap , access number: $accessNumber ")
     logWarning(s"Leasing: after: DAGInfoMap: $DAGInfoMap , access number: $accessNumber ")
