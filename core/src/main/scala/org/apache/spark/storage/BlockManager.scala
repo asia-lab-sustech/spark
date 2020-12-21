@@ -548,14 +548,12 @@ private[spark] class BlockManager(
         logDebug(s"Level for block $blockId is $level")
         if (level.useMemory && memoryStore.contains(blockId)) {
          // HIt
-          if (blockId.isRDD) {
             logWarning(s"LRC: Cache Hit: $blockId")
             this.synchronized(
               hitCount += 1
             )
             memoryStore.deductRefCountByBlockIdHit(blockId)
             memoryStore.deductLease()
-          }
 
           val iter: Iterator[Any] = if (level.deserialized) {
             memoryStore.getValues(blockId).get
@@ -569,7 +567,6 @@ private[spark] class BlockManager(
         } else if (level.useDisk && diskStore.contains(blockId)) {
 
           //miss
-          if (blockId.isRDD){
             val rddId = blockId.asRDDId.toString.split("_")(1).toInt
             logWarning(s"LRC: RDD block Cache Miss: $blockId, " +
               s"will deduct its referenced count by 1")
@@ -578,7 +575,7 @@ private[spark] class BlockManager(
               memoryStore.deductRefCountByBlockIdMiss(blockId)
               memoryStore.deductLease()
             }
-          }
+
           val iterToReturn: Iterator[Any] = {
             val diskBytes = diskStore.getBytes(blockId)
             if (level.deserialized) {
@@ -636,7 +633,6 @@ private[spark] class BlockManager(
       if (level.useDisk && diskStore.contains(blockId)) {
 
 
-        if (blockId.isRDD){
           val rddId = blockId.asRDDId.toString.split("_")(1).toInt
           logWarning(s"LRC: RDD block Cache Miss: $blockId, " +
             s"will deduct its referenced count by 1")
@@ -645,7 +641,6 @@ private[spark] class BlockManager(
             memoryStore.deductRefCountByBlockIdMiss(blockId)
             memoryStore.deductLease()
           }
-        }
 
         // Note: we purposely do not try to put the block back into memory here. Since this branch
         // handles deserialized blocks, this block may only be cached in memory as objects, not
@@ -654,14 +649,12 @@ private[spark] class BlockManager(
         diskStore.getBytes(blockId)
       } else if (level.useMemory && memoryStore.contains(blockId)) {
         // HIt
-        if (blockId.isRDD) {
           logWarning(s"LRC: Cache Hit: $blockId")
           this.synchronized(
             hitCount += 1
           )
           memoryStore.deductRefCountByBlockIdHit(blockId)
           memoryStore.deductLease()
-        }
 
         // The block was not found on disk, so serialize an in-memory copy:
         serializerManager.dataSerializeWithExplicitClassTag(
@@ -673,19 +666,16 @@ private[spark] class BlockManager(
       if (level.useMemory && memoryStore.contains(blockId)) {
         // Hit
 
-        if (blockId.isRDD) {
           logWarning(s"LRC: Cache Hit: $blockId")
           this.synchronized(
             hitCount += 1
           )
           memoryStore.deductRefCountByBlockIdHit(blockId)
           memoryStore.deductLease()
-        }
 
         memoryStore.getBytes(blockId).get
       } else if (level.useDisk && diskStore.contains(blockId)) {
         // miss
-        if (blockId.isRDD){
           val rddId = blockId.asRDDId.toString.split("_")(1).toInt
           logWarning(s"LRC: RDD block Cache Miss: $blockId, " +
             s"will deduct its referenced count by 1")
@@ -694,7 +684,6 @@ private[spark] class BlockManager(
             memoryStore.deductRefCountByBlockIdMiss(blockId)
             memoryStore.deductLease()
           }
-        }
 
         val diskBytes = diskStore.getBytes(blockId)
         maybeCacheDiskBytesInMemory(info, blockId, level, diskBytes).getOrElse(diskBytes)
