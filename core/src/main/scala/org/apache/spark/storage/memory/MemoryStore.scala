@@ -1186,10 +1186,10 @@ private[spark] class MemoryStore(
    *
    **/
   def updateDAGInfoThisJob(DAGInfo: mutable.HashMap[Int, mutable.HashMap[Int, Int]], accessNumber: Int): Unit = {
-    logWarning(s"Leasing: Update DAGInfo on receiveing jobDAG $DAGInfo")
+    logInfo(s"Leasing: Update DAGInfo on receiveing jobDAG $DAGInfo")
 
-    logWarning(s"Leasing: before: currentDAGInfoMap: $currentDAGInfoMap , access number: $accessNumber ")
-    logWarning(s"Leasing: before: DAGInfoMap: $DAGInfoMap , access number: $accessNumber ")
+    logInfo(s"Leasing: before: currentDAGInfoMap: $currentDAGInfoMap , access number: $accessNumber ")
+    logInfo(s"Leasing: before: DAGInfoMap: $DAGInfoMap , access number: $accessNumber ")
 
     globalDAG.synchronized {
       for ((blockid, riAndfreq) <- DAGInfo) {
@@ -1212,8 +1212,8 @@ private[spark] class MemoryStore(
     }
     DAGInfoMap = DAGInfoMap.filter(kv => kv._2.nonEmpty)
     AccessNumberGlobal = accessNumber
-    logWarning(s"Leasing: after: currentDAGInfoMap: $currentDAGInfoMap , access number: $accessNumber ")
-    logWarning(s"Leasing: after: DAGInfoMap: $DAGInfoMap , access number: $accessNumber ")
+    logInfo(s"Leasing: after: currentDAGInfoMap: $currentDAGInfoMap , access number: $accessNumber ")
+    logInfo(s"Leasing: after: DAGInfoMap: $DAGInfoMap , access number: $accessNumber ")
 
     logWarning(s"Leasing: before OSL, leaseMAP $leaseMap")
     OSL()

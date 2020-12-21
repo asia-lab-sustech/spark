@@ -510,7 +510,7 @@ class BlockManagerMasterEndpoint(
   private def broadcastDAGInfo(jobId: Int, partitionNumber: Int,
                                DAGInfo: HashMap[Int, HashMap[Int, Int]], AccessNumber: Int): Unit = {
     logWarning(s"Leasing: Start to broadcast the DAGInfo of Job $jobId")
-    logWarning(s"Leasing: DAGInfo: $DAGInfo")
+    logInfo(s"Leasing: DAGInfo: $DAGInfo")
     for (bm <- blockManagerInfo.values) {
       val (currentDAGInfo, dagInfo, currentAccessnumber) = bm.slaveEndpoint.askWithRetry[(mutable.HashMap[Int, mutable.HashMap[Int, Int]], mutable.HashMap[Int,
         mutable.HashMap[Int, Int]], Int)](BroadcastDAGInfo(jobId, Some(DAGInfo), AccessNumber))

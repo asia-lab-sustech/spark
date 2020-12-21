@@ -483,14 +483,14 @@ class DAGScheduler(
 
 
   private def profileRefCountStageByStage(rdd: RDD[_], jobId: Int): Unit = {
-    logWarning("LRC: profiling" + " jobId " + jobId + " rdd: " + rdd.id
+    logInfo("LRC: profiling" + " jobId " + jobId + " rdd: " + rdd.id
       + " " + rdd.getStorageLevel.useMemory)
     val refCountByJob = new HashMap[Int, Int]
     profileRefCountOneStage(rdd, jobId, refCountByJob)
     while (!waitingReStages.isEmpty) {
       profileRefCountOneStage(waitingReStages.dequeue(), jobId, refCountByJob)
     }
-    logWarning("LRC: profiling" + " jobId " + jobId + "done" + " rdd: " + rdd.id)
+    logInfo("LRC: profiling" + " jobId " + jobId + "done" + " rdd: " + rdd.id)
     val numberOfRDDPartitions = rdd.getNumPartitions
     blockManagerMaster.broadcastRefCount(jobId, numberOfRDDPartitions, refCountByJob)
     writeRefCountToFile(jobId, refCountByJob)
@@ -510,7 +510,7 @@ class DAGScheduler(
     if (!visitedStageRDDs.contains(rdd.id)) {
       visitedStageRDDs += rdd.id
     } else {
-      logWarning("LRC: visited stage rdd: " + rdd.id + " skip")
+      logInfo("LRC: visited stage rdd: " + rdd.id + " skip")
       return
     }
     def visit(rdd: RDD[_]): Unit = {
@@ -523,20 +523,20 @@ class DAGScheduler(
         }
       }
       for (dep <- rdd.dependencies) {
-        logWarning("LRC: processing dependency between rdd: " + rdd.id + " " + dep.rdd.id)
+        logInfo("LRC: processing dependency between rdd: " + rdd.id + " " + dep.rdd.id)
         dep match {
           case shufDep: ShuffleDependency[_, _, _] =>
             if (!expendedNodes.contains(shufDep.rdd.id)) {
               if (!waitingReStages.contains(shufDep.rdd)) {
                 waitingReStages += shufDep.rdd
-                logWarning("LRC: shuffllede between " + rdd.id +
+                logInfo("LRC: shuffllede between " + rdd.id +
                   " and " + shufDep.rdd.id + ", to the queue")
               } else {
-                logWarning("LRC: shuffllede between " + rdd.id +
+                logInfo("LRC: shuffllede between " + rdd.id +
                   " and " + shufDep.rdd.id + ", duplecated, cancel")
               }
             } else {
-              logWarning("LRC: shuffllede between " + rdd.id +
+              logInfo("LRC: shuffllede between " + rdd.id +
                 " and " + shufDep.rdd.id + " skip")
             }
           case narrowDep: NarrowDependency[_] =>
@@ -552,18 +552,18 @@ class DAGScheduler(
               if (rddIdToRefCount.contains(narrowDep.rdd.id)) {
                 val temp = rddIdToRefCount(narrowDep.rdd.id) + 1
                 rddIdToRefCount.put(narrowDep.rdd.id, temp)
-                logWarning("LRC: RefCount for " + narrowDep.rdd.id + " is " + temp)
+                logInfo("LRC: RefCount for " + narrowDep.rdd.id + " is " + temp)
               } else {
                 rddIdToRefCount.put(narrowDep.rdd.id, 1)
-                logWarning("LRC: RefCount for " + narrowDep.rdd.id + " is 1")
+                logInfo("LRC: RefCount for " + narrowDep.rdd.id + " is 1")
               }
               if (refCountById.contains(narrowDep.rdd.id)) {
                 val temp = refCountById(narrowDep.rdd.id) + 1
                 refCountById.put(narrowDep.rdd.id, temp)
-                 logWarning("LRC: RefCount for " + narrowDep.rdd.id + " is " + temp)
+                logInfo("LRC: RefCount for " + narrowDep.rdd.id + " is " + temp)
               } else {
                 refCountById.put(narrowDep.rdd.id, 1)
-                 logWarning("LRC: RefCount for " + narrowDep.rdd.id + " is 1")
+                logInfo("LRC: RefCount for " + narrowDep.rdd.id + " is 1")
               }
             }
           // expendedNodes.add(rdd)
@@ -578,7 +578,7 @@ class DAGScheduler(
     // Drop 1 ref count of the in memory RDD with the biggest id
     if (newInMemoryRDDs.length > 0) {
       for (can <- newInMemoryRDDs) {
-        logWarning("LRC: droping new in stage RDD: " + can)
+        logInfo("LRC: droping new in stage RDD: " + can)
         if (refCountById.contains(can)) {
           refCountById -= can
         }
@@ -611,7 +611,7 @@ class DAGScheduler(
 
 
   private def profileDAGThisJob(rdd: RDD[_], jobId: Int): Unit = {
-    logWarning("Leasing: profiling " + jobId + "rdd: " + rdd.id + " " + rdd.getStorageLevel.useMemory)
+    logInfo("Leasing: profiling " + jobId + "rdd: " + rdd.id + " " + rdd.getStorageLevel.useMemory)
    // val DAGInfoByJob = new mutable.HashMap[Int, HashMap[Int, Int]] // RddId => HashMap(reuseInterval, Frequency)
 
     val nodeAndChildren = new HashMap[Int, mutable.HashSet[Int]]
@@ -641,7 +641,7 @@ class DAGScheduler(
         nodeAndParents.put(rdd.id, new mutable.HashSet[Int])
         for (dep <- rdd.dependencies) {
           totalAccessNumber += 1
-          logWarning("Leasing: processing depencency between rdd: " + rdd.id + " " + dep.rdd.id)
+          logInfo("Leasing: processing depencency between rdd: " + rdd.id + " " + dep.rdd.id)
           nodeAndParents(rdd.id).add(dep.rdd.id)
           dep match {
             case shufDep: ShuffleDependency[_, _, _] =>
@@ -696,7 +696,7 @@ class DAGScheduler(
     while (waitingForVisit.nonEmpty) {
       firstVisit(waitingForVisit.pop())
     } // here we get the children and parents Map nodeAndChildren rdd => children
-    logWarning(s"Leasing: we got the nodeToChildren:$nodeAndChildren and nodeToParents:$nodeAndParents")
+    logInfo(s"Leasing: we got the nodeToChildren:$nodeAndChildren and nodeToParents:$nodeAndParents")
 
     // here we renew the visited RDDs
     visitedRDDs = visitedRDDs ++ collectionOfRDDThisJob
@@ -739,8 +739,8 @@ class DAGScheduler(
         goDeepest(child, traceMap(reusableRdd)(child))
       }
     }
-    logWarning(s"Leasing: goDeepest out!!")
-    logWarning(s"Leasing: RDDs of this job is "+ nodeAndChildren.keySet)
+    logInfo(s"Leasing: goDeepest out!!")
+    logInfo(s"Leasing: RDDs of this job is "+ nodeAndChildren.keySet)
     val DAGInfoMap = new HashMap[Int, HashMap[Int, Int]] // rddid => (reuseInterval=> frequency)
     for (rdd <- nodeAndChildren.keySet) {
       DAGInfoMap.put(rdd, new HashMap[Int, Int])
@@ -771,8 +771,8 @@ class DAGScheduler(
 //      }
 //    }
 
-    logWarning(s"Leasing: Total Memory Access Number is $totalAccessNumber")
-    logWarning(s"Leasing: Trace of $jobId is $DAGInfoMap")
+    logInfo(s"Leasing: Total Memory Access Number is $totalAccessNumber")
+    logInfo(s"Leasing: Trace of $jobId is $DAGInfoMap")
     val numberOfRDDPartitions = rdd.getNumPartitions
     blockManagerMaster.broadcastDAGInfo(jobId, numberOfRDDPartitions, DAGInfoMap, totalAccessNumber)
   }
