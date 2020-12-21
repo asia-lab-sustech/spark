@@ -708,7 +708,7 @@ class DAGScheduler(
     // A rdd is computable when 1) all dependencies are computed in the traceSet
     // 2) Or the '''uncomputed''' dependencies are '''unrelated'''
     def computable(node: Int, traceSet: mutable.ArrayBuffer[Int]) = {
-      logWarning(s"Leasing: verify the computbility of $node")
+      logInfo(s"Leasing: verify the computbility of $node")
       var flag = true
       for (parent <- nodeAndParents.getOrElse(node, mutable.ArrayBuffer())) {
         if (!traceSet.contains(parent)) {
@@ -721,7 +721,7 @@ class DAGScheduler(
     }
     // traceMap: is the child => trace of the deepest
     def goDeepest(child: Int, traceSet: mutable.ArrayBuffer[Int]): Unit = {
-      logWarning(s"Leasing: Godeepst pass by $child")
+      logInfo(s"Leasing: Godeepst pass by $child")
       if ( computable(child, traceSet)) {
         traceSet += child
       }

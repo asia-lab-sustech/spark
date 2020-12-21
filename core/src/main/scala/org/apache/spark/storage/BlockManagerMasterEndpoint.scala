@@ -514,7 +514,7 @@ class BlockManagerMasterEndpoint(
     for (bm <- blockManagerInfo.values) {
       val (currentDAGInfo, dagInfo, currentAccessnumber) = bm.slaveEndpoint.askWithRetry[(mutable.HashMap[Int, mutable.HashMap[Int, Int]], mutable.HashMap[Int,
         mutable.HashMap[Int, Int]], Int)](BroadcastDAGInfo(jobId, Some(DAGInfo), AccessNumber))
-      logWarning(s"Leasing: Update Current")
+      logInfo(s"Leasing: Update Current")
     }
   }
 
