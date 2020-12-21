@@ -20,6 +20,7 @@ package org.apache.spark.storage.memory
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.util.{LinkedHashMap, UUID}
+import scala.collection.JavaConverters._
 
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
@@ -840,9 +841,9 @@ private[spark] class MemoryStore(
       var freedMemory2 = 0L
       val selectedBlocks2 = new ArrayBuffer[BlockId]
       currentDAGInfoMap.synchronized {
-        val BlocksDoNotHaveALease = entries
-          .keySet()
-          .asInstanceOf[Set[BlockId]]
+        val s = entries.asScala
+        val BlocksDoNotHaveALease =  s
+          .keySet
           .filter( x => !leaseMap.contains(x.asRDDId.toString.split("_")(1).toInt) )
         breakable {
           for ( thisblockId <- BlocksDoNotHaveALease) {
