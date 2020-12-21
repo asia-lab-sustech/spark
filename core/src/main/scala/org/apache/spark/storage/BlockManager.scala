@@ -338,7 +338,7 @@ private[spark] class BlockManager(
   }
 
   def reportCacheHit(): Unit = {
-    logInfo(s"yyh: $blockManagerId reporting Cache hit to the master, " +
+    logWarning(s"LRC: $blockManagerId reporting Cache hit to the master, " +
       s"hit $hitCount, miss $missCount")
     if (!master.reportCacheHit(blockManagerId, List(hitCount, missCount, diskRead, diskWrite))) {
       logError(s"$blockManagerId failed to report Cache hit to master; giving up.")
