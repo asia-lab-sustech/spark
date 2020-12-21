@@ -1046,7 +1046,7 @@ private[spark] class MemoryStore(
     refMap.synchronized{
       refMap(blockId) -= 1
       val newRefCount = refMap(blockId)
-      logInfo(s"yyh: ref count of $blockId is deducted to $newRefCount")
+      logWarning(s"LRC: ref count of $blockId is deducted to $newRefCount")
     }
     currentRefMap.synchronized{ currentRefMap(blockId) -= 1}
   }
