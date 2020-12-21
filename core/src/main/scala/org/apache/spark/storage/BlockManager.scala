@@ -547,6 +547,14 @@ private[spark] class BlockManager(
         val level = info.level
         logDebug(s"Level for block $blockId is $level")
         if (level.useMemory && memoryStore.contains(blockId)) {
+          if (blockId.isRDD) {
+            logInfo(s"LRC: Cache Hit: $blockId")
+            this.synchronized(
+              hitCount += 1
+            )
+            memoryStore.deductRefCountByBlockIdHit(blockId)
+            memoryStore.deductLease()
+          }
           val iter: Iterator[Any] = if (level.deserialized) {
             memoryStore.getValues(blockId).get
           } else {
@@ -555,27 +563,14 @@ private[spark] class BlockManager(
           }
           val ci = CompletionIterator[Any, Iterator[Any]](iter, releaseLock(blockId))
           val result = Some(new BlockResult(ci, DataReadMethod.Memory, info.size))
-          result match {
-            case Some(x) =>
-              if (blockId.isRDD) {
-                logInfo(s"LRC: Cache Hit: $blockId")
-                this.synchronized(
-                  hitCount += 1
-                )
-                memoryStore.deductRefCountByBlockIdHit(blockId)
-                memoryStore.deductLease()
-              }
-          }
           result
         } else if (level.useDisk && diskStore.contains(blockId)) {
           if (blockId.isRDD){
             val rddId = blockId.asRDDId.toString.split("_")(1).toInt
-            if(refProfile_online.contains(rddId)){
-              logInfo(s"yyh: RDD block Cache Miss: $blockId, " +
-                s"will deduct its referenced count by 1")
-              this.synchronized {
-                missCount += 1
-              }
+            logWarning(s"yyh: RDD block Cache Miss: $blockId, " +
+              s"will deduct its referenced count by 1")
+            this.synchronized {
+              missCount += 1
               memoryStore.deductRefCountByBlockIdMiss(blockId)
               memoryStore.deductLease()
             }
