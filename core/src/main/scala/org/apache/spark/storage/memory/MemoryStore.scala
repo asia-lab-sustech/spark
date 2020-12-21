@@ -209,7 +209,7 @@ private[spark] class MemoryStore(
      if (!entries.isEmpty) {
        entries.size()
      } else {
-       DAGInfoMap.size * DAGInfoMap.size / DAGInfoMap.size
+       DAGInfoMap.size
      }
   }
 
