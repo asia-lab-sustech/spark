@@ -861,8 +861,9 @@ private[spark] class MemoryStore(
             }
           }
           if (freedMemory2 < space) {
+            val listmap =ListMap(leaseMap.toSeq.sortBy(_._2): _*)
             breakable {
-              for ( thisrddid <- ListMap(leaseMap.toSeq.sortBy(_._2): _*).keySet) {
+              for ( (thisrddid, _) <- listmap) {
                 if (currentDAGInfoMap.contains(thisrddid)) {
                   entries.synchronized {
                     val iterator = entries.entrySet().iterator()
