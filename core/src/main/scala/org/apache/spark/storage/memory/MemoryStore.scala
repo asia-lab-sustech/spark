@@ -844,6 +844,7 @@ private[spark] class MemoryStore(
         val s = entries.asScala
         val BlocksDoNotHaveALease =  s
           .keySet
+          .filter( x => x.isRDD)
           .filter( x => !leaseMap.contains(getRddId(x).getOrElse(0)) )
         breakable {
           for ( thisblockId <- BlocksDoNotHaveALease) {
