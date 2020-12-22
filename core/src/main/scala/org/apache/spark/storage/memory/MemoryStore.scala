@@ -847,7 +847,7 @@ private[spark] class MemoryStore(
           .filter( x => x.isRDD)
           .filter( x => !leaseMap.contains(getRddId(x).getOrElse(0)) )
         breakable {
-          for ( thisblockId <- BlocksDoNotHaveALease) {
+          for (thisblockId <- BlocksDoNotHaveALease) {
             if (entries.containsKey(thisblockId) && blockIsEvictable(thisblockId, entries.get(thisblockId))) {
               if (blockManager.blockInfoManager.lockForWriting(thisblockId, blocking = false).isDefined) {
                 if (freedMemory2 < space) {
@@ -861,6 +861,7 @@ private[spark] class MemoryStore(
               }
             }
           }
+        }
           if (freedMemory2 < space) {
             val listmap =ListMap(leaseMap.toSeq.sortBy(_._2): _*)
             breakable {
@@ -890,7 +891,6 @@ private[spark] class MemoryStore(
               }
             }
           }
-        }
       }
       logWarning(s"Leasing: The to evict block is $selectedBlocks2")
 
