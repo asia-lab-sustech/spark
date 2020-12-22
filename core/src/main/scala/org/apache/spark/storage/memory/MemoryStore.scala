@@ -873,12 +873,14 @@ private[spark] class MemoryStore(
                       val pair = iterator.next()
                       val blockId = pair.getKey
                       val entry = pair.getValue
-                      val corddid = blockId.asRDDId.toString.split("_")(1).toInt
-                      if (thisrddid == corddid ) {
-                        if ( blockIsEvictable(blockId, entry)) {
-                          if (!selectedBlocks2.contains(blockId)) {
-                            selectedBlocks2 += blockId
-                            freedMemory2 += pair.getValue.size
+                      if (blockId.isRDD) {
+                        val corddid = blockId.asRDDId.toString.split("_")(1).toInt
+                        if (thisrddid == corddid ) {
+                          if ( blockIsEvictable(blockId, entry)) {
+                            if (!selectedBlocks2.contains(blockId)) {
+                              selectedBlocks2 += blockId
+                              freedMemory2 += pair.getValue.size
+                            }
                           }
                         }
                       }
