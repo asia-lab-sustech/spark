@@ -100,6 +100,7 @@ private[spark] class MemoryStore(
   private def totalNumberOfDataBlocks = DAGInfoMap.count(kv => kv._2.nonEmpty)
 
   private val leaseMap = mutable.HashMap[Int, Int]()
+  private val currentLease = mutable.HashMap[Int, Int]()
 
 
   // Require M -- Total number of data blocks =>  total Number of RDD for this job => DAGInfoMap.size
@@ -193,11 +194,20 @@ private[spark] class MemoryStore(
   }
 
   // deduct the lease by one when access the cache
-  def deductLease() : Unit = {
+  def deductLease(blockId: BlockId) : Unit = {
     logWarning(s"Leasing: Drop all lease by 1")
-    for ( (k,v) <- leaseMap ){
-      if ( currentDAGInfoMap.contains(k)) { // here we only deduct the lease that we have right now
-        leaseMap(k)  = if (v -1 >0) v - 1 else 0
+    currentLease.synchronized {
+      for ( (k,v) <- currentLease){
+        currentLease(k)  = if (v -1 >0) v - 1 else 0
+      }
+    }
+    val rddid = blockId.asRDDId.toString.split("_")(1).toInt
+    // lease fitting
+    currentLease.synchronized {
+      if (currentLease.contains(rddid)) {
+        currentLease(rddid) = leaseMap.getOrElse(rddid, 0)
+      } else {
+        currentLease.put(rddid, leaseMap.getOrElse(rddid, 0))
       }
     }
   }
@@ -207,8 +217,9 @@ private[spark] class MemoryStore(
   // how many memory block can be cached over the last iteration
   private def getAverageCacheSize: Long = {
     var totalMem : Long = 0
-     if (!entries.isEmpty) {
-       entries.size()
+     if (entries.asScala.keySet.count(x => x.isRDD) > 0) {
+//       entries.size()
+       entries.asScala.keySet.count(x => x.isRDD)
      } else {
        DAGInfoMap.size
      }
@@ -296,9 +307,11 @@ private[spark] class MemoryStore(
         if (DAGInfoMap.contains(rddId)) {
           logWarning("Leasing: The to unrooled block, we got its RI")
           currentDAGInfoMap.put(rddId, DAGInfoMap(rddId))
+          currentLease.put(rddId, leaseMap.getOrElse(rddId, 0))
         } else if (globalDAG.contains(rddId)) {
           logWarning("Leasing: The to unrooled block, we got its RI from the global dag")
           currentDAGInfoMap.put(rddId, globalDAG(rddId))
+          currentLease.put(rddId, leaseMap.getOrElse(rddId, 0))
         }
       }
 
@@ -375,16 +388,7 @@ private[spark] class MemoryStore(
       }
     }
 
-    if (blockId.isRDD) {
-      val rddId = blockId.asRDDId.toString.split("_")(1).toInt
-      if (DAGInfoMap.contains(rddId)) {
-        logWarning("Leasing: The to unrooled block, we got its RI")
-        currentDAGInfoMap.put(rddId, DAGInfoMap(rddId))
-      } else if (globalDAG.contains(rddId)) {
-        logWarning("Leasing: The to unrooled block, we got its RI from the global dag")
-        currentDAGInfoMap.put(rddId, globalDAG(rddId))
-      }
-    }
+
 
 
     // Request enough memory to begin unrolling
@@ -496,12 +500,20 @@ private[spark] class MemoryStore(
             logInfo(s"LRC: put $blockId in current ref map: $ref_count")
           }
         }
-//        if (blockId.isRDD) {
-//          currentDAGInfoMap.synchronized {
-//            val rddid = blockId.asRDDId.toString.split("_")(1).toInt
-//            currentDAGInfoMap.put(rddid, DAGInfoMap(rddid))
-//          }
-//        }
+       // LEasing: assign lease to the in-coming block
+        if (blockId.isRDD) {
+          val rddId = blockId.asRDDId.toString.split("_")(1).toInt
+          if (DAGInfoMap.contains(rddId)) {
+            logWarning("Leasing: The to unrooled block, we got its RI")
+            currentDAGInfoMap.put(rddId, DAGInfoMap(rddId))
+            currentLease.put(rddId, leaseMap.getOrElse(rddId, 0))
+          } else if (globalDAG.contains(rddId)) {
+            logWarning("Leasing: The to unrooled block, we got its RI from the global dag")
+            currentDAGInfoMap.put(rddId, globalDAG(rddId))
+            currentLease.put(rddId, leaseMap.getOrElse(rddId, 0))
+          }
+        }
+
         logInfo("Block %s stored as values in memory (estimated size %s, free %s)".format(
           blockId, Utils.bytesToString(size), Utils.bytesToString(maxMemory - blocksMemoryUsed)))
         Right(size)
@@ -628,9 +640,11 @@ private[spark] class MemoryStore(
         if (DAGInfoMap.contains(rddId)) {
           logWarning("Leasing: The to unrooled block, we got its RI")
           currentDAGInfoMap.put(rddId, DAGInfoMap(rddId))
+          currentLease.put(rddId, leaseMap.getOrElse(rddId, 0))
         } else if (globalDAG.contains(rddId)) {
           logWarning("Leasing: The to unrooled block, we got its RI from the global dag")
           currentDAGInfoMap.put(rddId, globalDAG(rddId))
+          currentLease.put(rddId, leaseMap.getOrElse(rddId, 0))
         }
       }
 
@@ -712,9 +726,9 @@ private[spark] class MemoryStore(
           currentDAGInfoMap.remove(getRddId(blockId).get)
         }
       }
-      leaseMap.synchronized {
-        if (leaseMap.contains(getRddId(blockId).get)) {
-          leaseMap.remove(getRddId(blockId).get)
+      currentLease.synchronized {
+        if (currentLease.contains(getRddId(blockId).get)) {
+          currentLease.remove(getRddId(blockId).get)
         }
       }
     }
@@ -846,7 +860,7 @@ private[spark] class MemoryStore(
         val BlocksDoNotHaveALease =  s
           .keySet
           .filter( x => x.isRDD)
-          .filter( x => !leaseMap.contains(getRddId(x).getOrElse(0)) )
+          .filter( x => !currentLease.contains(getRddId(x).getOrElse(0)) )
         breakable {
           for (thisblockId <- BlocksDoNotHaveALease) {
             if (entries.containsKey(thisblockId) && blockIsEvictable(thisblockId, entries.get(thisblockId))) {
@@ -864,7 +878,7 @@ private[spark] class MemoryStore(
           }
         }
           if (freedMemory < space) {
-            val listmap =ListMap(leaseMap.toSeq.sortBy(_._2): _*)
+            val listmap =ListMap(currentLease.toSeq.sortBy(_._2): _*)
             breakable {
               for ( (thisrddid, _) <- listmap) {
                 if (currentDAGInfoMap.contains(thisrddid)) {

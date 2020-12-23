@@ -554,7 +554,7 @@ private[spark] class BlockManager(
               hitCount += 1
             )
             memoryStore.deductRefCountByBlockIdHit(blockId)
-            memoryStore.deductLease()
+            memoryStore.deductLease(blockId)
           } else {
             logWarning(s"LRC: $blockId is not rdd block")
           }
@@ -578,7 +578,7 @@ private[spark] class BlockManager(
             this.synchronized {
               missCount += 1
               memoryStore.deductRefCountByBlockIdMiss(blockId)
-              memoryStore.deductLease()
+              memoryStore.deductLease(blockId)
             }
           } else {
             logWarning(s"LRC: $blockId is not rdd block")
@@ -647,7 +647,7 @@ private[spark] class BlockManager(
           this.synchronized {
             missCount += 1
             memoryStore.deductRefCountByBlockIdMiss(blockId)
-            memoryStore.deductLease()
+            memoryStore.deductLease(blockId)
           }
         } else {
           logWarning(s"LRC: $blockId is not rdd block")
@@ -662,11 +662,11 @@ private[spark] class BlockManager(
         // HIt
         if (blockId.isRDD) {
           logWarning(s"LRC: Cache Hit: $blockId")
-          this.synchronized(
+          this.synchronized {
             hitCount += 1
-          )
-          memoryStore.deductRefCountByBlockIdHit(blockId)
-          memoryStore.deductLease()
+            memoryStore.deductRefCountByBlockIdHit(blockId)
+            memoryStore.deductLease(blockId)
+          }
         } else {
           logWarning(s"LRC: $blockId is not rdd block")
         }
@@ -687,7 +687,7 @@ private[spark] class BlockManager(
             hitCount += 1
           )
           memoryStore.deductRefCountByBlockIdHit(blockId)
-          memoryStore.deductLease()
+          memoryStore.deductLease(blockId)
         } else {
           logWarning(s"LRC: $blockId is not rdd block")
         }
@@ -702,7 +702,7 @@ private[spark] class BlockManager(
           this.synchronized {
             missCount += 1
             memoryStore.deductRefCountByBlockIdMiss(blockId)
-            memoryStore.deductLease()
+            memoryStore.deductLease(blockId)
           }
         } else {
           logWarning(s"LRC: $blockId is not rdd block")
