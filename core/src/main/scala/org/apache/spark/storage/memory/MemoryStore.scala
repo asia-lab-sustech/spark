@@ -879,8 +879,10 @@ private[spark] class MemoryStore(
                         if (thisrddid == corddid ) {
                           if ( blockIsEvictable(blockId, entry)) {
                             if (!selectedBlocks.contains(blockId)) {
-                              selectedBlocks += blockId
-                              freedMemory += pair.getValue.size
+                              if (blockManager.blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
+                                selectedBlocks += blockId
+                                freedMemory += pair.getValue.size
+                              }
                             }
                           }
                         }
