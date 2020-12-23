@@ -797,49 +797,50 @@ private[spark] class MemoryStore(
 //      }
       ///!!!!!!!!!!!!!!!!!!!!!!!   Above is LRU
 
-      var blockToCacheRefCount = Int.MaxValue
-      // yyh: if this is a broadcast block, cache it anyway
-      refMap.synchronized {
-        if (blockId.isDefined && blockId.get.isRDD){
-          if (refMap.contains(blockId.get))
-          {
-            blockToCacheRefCount = refMap(blockId.get)
-            logInfo(s"LRC: The ref count of $blockId is $blockToCacheRefCount")
-          }
-          else {
-            blockToCacheRefCount = 1
-            logError(s"LRC: The ref count of $blockId is not in the refMap")
-          }
-        }
-      }
+//      var blockToCacheRefCount = Int.MaxValue
+//      // yyh: if this is a broadcast block, cache it anyway
+//      refMap.synchronized {
+//        if (blockId.isDefined && blockId.get.isRDD){
+//          if (refMap.contains(blockId.get))
+//          {
+//            blockToCacheRefCount = refMap(blockId.get)
+//            logInfo(s"LRC: The ref count of $blockId is $blockToCacheRefCount")
+//          }
+//          else {
+//            blockToCacheRefCount = 1
+//            logError(s"LRC: The ref count of $blockId is not in the refMap")
+//          }
+//        }
+//      }
+//
+//      currentRefMap.synchronized {
+//      // Sort all the blocks in current cache by their ref counts
+//      // Only rdd blocks will be put in the currentRefMap
+//      val listMap = ListMap(currentRefMap.toSeq.sortBy(_._2): _*)
+//      breakable {
+//        for ((thisBlockId, thisRefCount) <- listMap){
+//          if (entries.containsKey(thisBlockId) && blockIsEvictable(thisBlockId, entries.get(thisBlockId))) {
+//            if (blockManager.blockInfoManager.lockForWriting(thisBlockId, blocking = false).isDefined) {
+//              if (thisRefCount < blockToCacheRefCount && freedMemory < space) {
+//                selectedBlocks += thisBlockId
+//                entries.synchronized {
+//                  freedMemory += entries.get(thisBlockId).size
+//                }
+//              }
+//              else {
+//                break
+//              }
+//            }
+//            }
+//          }
+//        }
+//      }
+//      logInfo(s"LRC: To evict blocks $selectedBlocks")
+      //!!!!!!!!!!!!!!!!!!!!!!!!!  ABOVE IS LRC !!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-      currentRefMap.synchronized {
-      // Sort all the blocks in current cache by their ref counts
-      // Only rdd blocks will be put in the currentRefMap
-      val listMap = ListMap(currentRefMap.toSeq.sortBy(_._2): _*)
-      breakable {
-        for ((thisBlockId, thisRefCount) <- listMap){
-          if (entries.containsKey(thisBlockId) && blockIsEvictable(thisBlockId, entries.get(thisBlockId))) {
-            if (blockManager.blockInfoManager.lockForWriting(thisBlockId, blocking = false).isDefined) {
-              if (thisRefCount < blockToCacheRefCount && freedMemory < space) {
-                selectedBlocks += thisBlockId
-                entries.synchronized {
-                  freedMemory += entries.get(thisBlockId).size
-                }
-              }
-              else {
-                break
-              }
-            }
-            }
-          }
-        }
-      }
-      logInfo(s"LRC: To evict blocks $selectedBlocks")
 
-
-      var freedMemory2 = 0L
-      val selectedBlocks2 = new ArrayBuffer[BlockId]
+//      var freedMemory = 0L
+//      val selectedBlocks2 = new ArrayBuffer[BlockId]
       currentDAGInfoMap.synchronized {
         val s = entries.asScala
         val BlocksDoNotHaveALease =  s
@@ -850,10 +851,10 @@ private[spark] class MemoryStore(
           for (thisblockId <- BlocksDoNotHaveALease) {
             if (entries.containsKey(thisblockId) && blockIsEvictable(thisblockId, entries.get(thisblockId))) {
               if (blockManager.blockInfoManager.lockForWriting(thisblockId, blocking = false).isDefined) {
-                if (freedMemory2 < space) {
-                  selectedBlocks2 += thisblockId
+                if (freedMemory < space) {
+                  selectedBlocks += thisblockId
                   entries.synchronized {
-                    freedMemory2 += entries.get(thisblockId).size
+                    freedMemory += entries.get(thisblockId).size
                   }
                 } else {
                   break
@@ -862,14 +863,14 @@ private[spark] class MemoryStore(
             }
           }
         }
-          if (freedMemory2 < space) {
+          if (freedMemory < space) {
             val listmap =ListMap(leaseMap.toSeq.sortBy(_._2): _*)
             breakable {
               for ( (thisrddid, _) <- listmap) {
                 if (currentDAGInfoMap.contains(thisrddid)) {
                   entries.synchronized {
                     val iterator = entries.entrySet().iterator()
-                    while (freedMemory2 < space && iterator.hasNext) {
+                    while (freedMemory < space && iterator.hasNext) {
                       val pair = iterator.next()
                       val blockId = pair.getKey
                       val entry = pair.getValue
@@ -877,16 +878,16 @@ private[spark] class MemoryStore(
                         val corddid = blockId.asRDDId.toString.split("_")(1).toInt
                         if (thisrddid == corddid ) {
                           if ( blockIsEvictable(blockId, entry)) {
-                            if (!selectedBlocks2.contains(blockId)) {
-                              selectedBlocks2 += blockId
-                              freedMemory2 += pair.getValue.size
+                            if (!selectedBlocks.contains(blockId)) {
+                              selectedBlocks += blockId
+                              freedMemory += pair.getValue.size
                             }
                           }
                         }
                       }
                     }
                   }
-                  if (freedMemory2 >= space) {
+                  if (freedMemory >= space) {
                     break
                   }
                 }
@@ -894,7 +895,7 @@ private[spark] class MemoryStore(
             }
           }
       }
-      logWarning(s"Leasing: The to evict block is $selectedBlocks2")
+      logWarning(s"Leasing: The to evict block is $selectedBlocks")
 
 
       def dropBlock[T](blockId: BlockId, entry: MemoryEntry[T]): Unit = {
