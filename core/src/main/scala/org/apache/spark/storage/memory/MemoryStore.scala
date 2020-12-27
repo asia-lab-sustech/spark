@@ -506,11 +506,11 @@ private[spark] class MemoryStore(
           if (DAGInfoMap.contains(rddId)) {
             logWarning("Leasing: The to unrooled block, we got its RI")
             currentDAGInfoMap.put(rddId, DAGInfoMap(rddId))
-            currentLease.put(rddId, leaseMap.getOrElse(rddId, 0))
+            currentLease.put(rddId, leaseMap.getOrElse(rddId, 1))
           } else if (globalDAG.contains(rddId)) {
             logWarning("Leasing: The to unrooled block, we got its RI from the global dag")
             currentDAGInfoMap.put(rddId, globalDAG(rddId))
-            currentLease.put(rddId, leaseMap.getOrElse(rddId, 0))
+            currentLease.put(rddId, leaseMap.getOrElse(rddId, 1))
           }
         }
 
@@ -640,11 +640,11 @@ private[spark] class MemoryStore(
         if (DAGInfoMap.contains(rddId)) {
           logWarning("Leasing: The to unrooled block, we got its RI")
           currentDAGInfoMap.put(rddId, DAGInfoMap(rddId))
-          currentLease.put(rddId, leaseMap.getOrElse(rddId, 0))
+          currentLease.put(rddId, leaseMap.getOrElse(rddId, 1))
         } else if (globalDAG.contains(rddId)) {
           logWarning("Leasing: The to unrooled block, we got its RI from the global dag")
           currentDAGInfoMap.put(rddId, globalDAG(rddId))
-          currentLease.put(rddId, leaseMap.getOrElse(rddId, 0))
+          currentLease.put(rddId, leaseMap.getOrElse(rddId, 1))
         }
       }
 
