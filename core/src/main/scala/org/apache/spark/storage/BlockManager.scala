@@ -169,6 +169,7 @@ private[spark] class BlockManager(
   private var missCount = 0 // miss count of rdd blocks
   var diskRead = 0 // count of disk read
   var diskWrite = 0 // count of disk write
+  var missRDDList = new mutable.MutableList[Int]
 
   /**
    * Initializes the BlockManager with the given appId. This is not performed in the constructor as
@@ -579,6 +580,7 @@ private[spark] class BlockManager(
               missCount += 1
               memoryStore.deductRefCountByBlockIdMiss(blockId)
               memoryStore.deductLease(blockId)
+              missRDDList += blockId.asRDDId.toString.split("_")(1).toInt
             }
           } else {
             logWarning(s"LRC: $blockId is not rdd block")
@@ -648,6 +650,7 @@ private[spark] class BlockManager(
             missCount += 1
             memoryStore.deductRefCountByBlockIdMiss(blockId)
             memoryStore.deductLease(blockId)
+            missRDDList += blockId.asRDDId.toString.split("_")(1).toInt
           }
         } else {
           logWarning(s"LRC: $blockId is not rdd block")
@@ -703,6 +706,7 @@ private[spark] class BlockManager(
             missCount += 1
             memoryStore.deductRefCountByBlockIdMiss(blockId)
             memoryStore.deductLease(blockId)
+            missRDDList += blockId.asRDDId.toString.split("_")(1).toInt
           }
         } else {
           logWarning(s"LRC: $blockId is not rdd block")
@@ -1558,6 +1562,11 @@ private[spark] class BlockManager(
 
   def stop(): Unit = {
     logInfo(s"LRC: BlockManager on executor $executorId is stopped and report cache hist to master")
+    val fw = new FileWriter("missRDD.txt", true)
+    for (miss <- missRDDList) {
+      fw.write(miss)
+    }
+    fw.close()
     reportCacheHit()
     blockTransferService.close()
     if (shuffleClient ne blockTransferService) {
