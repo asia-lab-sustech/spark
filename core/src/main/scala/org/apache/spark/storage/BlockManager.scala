@@ -1564,7 +1564,7 @@ private[spark] class BlockManager(
     logInfo(s"LRC: BlockManager on executor $executorId is stopped and report cache hist to master")
     val fw = new FileWriter("missRDD.txt", true)
     for (miss <- missRDDList) {
-      fw.write(miss)
+      fw.write(s"$miss ")
     }
     fw.close()
     reportCacheHit()

@@ -707,7 +707,7 @@ class DAGScheduler(
 
     val fw = new FileWriter("rddmanychild",true)
     for (rdd <- rddThatHasMoreThanOneChilren) {
-      fw.write(rdd)
+      fw.write(s"$rdd ")
     }
     fw.close()
 
