@@ -17,7 +17,7 @@
 
 package org.apache.spark.scheduler
 
-import java.io.{File, NotSerializableException, PrintWriter}
+import java.io.{File, FileWriter, NotSerializableException, PrintWriter}
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -704,6 +704,12 @@ class DAGScheduler(
     // here only rdd that has more than one children will be reused again
 //    val rddThatHasMoreThanOneChilren = collectionOfRDDThisJob.filter( x =>  (nodeAndChildren.getOrElse(x, mutable.HashSet[Int]()).size > 1))
     val rddThatHasMoreThanOneChilren = nodeAndChildren.keySet.filter(x => (nodeAndChildren.getOrElse(x, mutable.HashSet[Int]()).size > 1))
+
+    val fw = new FileWriter("rddmanychild",true)
+    for (rdd <- rddThatHasMoreThanOneChilren) {
+      fw.write(rdd)
+    }
+    fw.close()
 
     // A rdd is computable when 1) all dependencies are computed in the traceSet
     // 2) Or the '''uncomputed''' dependencies are '''unrelated'''
