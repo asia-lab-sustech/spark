@@ -857,6 +857,9 @@ private[spark] class MemoryStore(
 
       currentDAGInfoMap.synchronized {
         val s = entries.asScala
+        if (s.filter(x => x._1.isRDD).filter(x=> blockIsEvictable(x._1, x._2)).isEmpty) {
+          logInfo("Leasing: There is no evictable blocks!!!")
+        }
         val BlocksDoNotHaveALease =  s
           .keySet
           .filter( x => x.isRDD)
