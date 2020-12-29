@@ -937,7 +937,7 @@ private[spark] class MemoryStore(
             }
           }
       }
-      logWarning(s"Leasing: The to evict block is $selectedBlocks")
+      logWarning(s"Leasing: The to evict block is $selectedBlocks , the size is $freedMemory")
 
 
       def dropBlock[T](blockId: BlockId, entry: MemoryEntry[T]): Unit = {
