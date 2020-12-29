@@ -882,32 +882,55 @@ private[spark] class MemoryStore(
         }
           if (freedMemory < space) {
             val listmap =ListMap(currentLease.toSeq.sortBy(_._2): _*)
+//            breakable {
+//              for ( (thisrddid, _) <- listmap) {
+//                if (currentDAGInfoMap.contains(thisrddid)) {
+//                  entries.synchronized {
+//                    val iterator = entries.entrySet().iterator()
+//                    while (freedMemory < space && iterator.hasNext) {
+//                      val pair = iterator.next()
+//                      val blockId = pair.getKey
+//                      val entry = pair.getValue
+//                      if (blockId.isRDD) {
+//                        val corddid = blockId.asRDDId.toString.split("_")(1).toInt
+//                        if (thisrddid == corddid ) {
+//                          if ( blockIsEvictable(blockId, entry)) {
+//                            if (!selectedBlocks.contains(blockId)) {
+//                              if (blockManager.blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
+//                                selectedBlocks += blockId
+//                                freedMemory += pair.getValue.size
+//                              }
+//                            }
+//                          }
+//                        }
+//                      }
+//                    }
+//                  }
+//                  if (freedMemory >= space) {
+//                    break
+//                  }
+//                }
+//              }
+//            }
             breakable {
-              for ( (thisrddid, _) <- listmap) {
-                if (currentDAGInfoMap.contains(thisrddid)) {
-                  entries.synchronized {
-                    val iterator = entries.entrySet().iterator()
-                    while (freedMemory < space && iterator.hasNext) {
-                      val pair = iterator.next()
-                      val blockId = pair.getKey
-                      val entry = pair.getValue
-                      if (blockId.isRDD) {
-                        val corddid = blockId.asRDDId.toString.split("_")(1).toInt
-                        if (thisrddid == corddid ) {
-                          if ( blockIsEvictable(blockId, entry)) {
-                            if (!selectedBlocks.contains(blockId)) {
-                              if (blockManager.blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
-                                selectedBlocks += blockId
-                                freedMemory += pair.getValue.size
-                              }
-                            }
+              for ((thisRDDId, _) <- listmap) {
+                if (freedMemory >= space) {
+                  break
+                }
+                breakable {
+                  for (blockEvict <- s.keySet.filter(x => x.isRDD).filter((x => x.asRDDId.toString.split("_")(1).toInt==thisRDDId))) {
+                    if (entries.containsKey(blockEvict) && blockIsEvictable(blockEvict, entries.get(blockEvict))) {
+                      if (blockManager.blockInfoManager.lockForWriting(blockEvict, blocking = false).isDefined) {
+                        if (currentLease.getOrElse(thisRDDId, 1) <= currentLease.getOrElse(blockEvict.asRDDId.toString.split("_")(1).toInt, 0) && freedMemory < space) {
+                          selectedBlocks += blockEvict
+                          entries.synchronized {
+                            freedMemory += entries.get(blockEvict).size
                           }
+                        } else {
+                          break
                         }
                       }
                     }
-                  }
-                  if (freedMemory >= space) {
-                    break
                   }
                 }
               }
