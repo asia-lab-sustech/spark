@@ -873,7 +873,7 @@ class DAGScheduler(
     while (waitingForVisit.nonEmpty) {
       firstVisit(waitingForVisit.pop())
     } // here we get the children and parents Map nodeAndChildren rdd => children
-    logInfo(s"Leasing: we got the nodeToChildren:$nodeAndChildren and nodeToParents:$nodeAndParents")
+    logWarning(s"Leasing: we got the nodeToChildren:$nodeAndChildren and nodeToParents:$nodeAndParents")
 
     // here we renew the visited RDDs
     visitedRDDs = visitedRDDs ++ collectionOfRDDThisJob
@@ -891,8 +891,8 @@ class DAGScheduler(
       }
       flag
     }
-    val r = scala.util.Random
     def randomWalker() : ArrayBuffer[Int] = {
+      logWarning(s"Random walking!")
       if (collectionOfRDDThisJob.nonEmpty) {
         val rootRDD = collectionOfRDDThisJob.min
         var trace = new ArrayBuffer[Int]()
@@ -905,12 +905,13 @@ class DAGScheduler(
           s.iterator.drop(n).next()
         }
 
-        while (collectionOfRDDThisJob.filter( x => computable(x, trace)).nonEmpty) {
-          val computableThisTime = collectionOfRDDThisJob.filter(x => computable(x, trace))
+        while (collectionOfRDDThisJob.filter( x => computable(x, trace)).filter(x => !trace.contains(x)).nonEmpty) {
+          val computableThisTime = collectionOfRDDThisJob.filter(x => computable(x, trace)).filter(x => !trace.contains(x))
           val nextrdd = randomPick(computableThisTime)
           trace = trace ++ nodeAndParents.getOrElse(nextrdd, new mutable.HashSet[Int]()).toArray
           trace += nextrdd
         }
+        logWarning(s"Leasing: End Random walking, trace $trace")
         trace
       } else {
          new ArrayBuffer[Int]()
