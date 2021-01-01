@@ -949,7 +949,7 @@ class DAGScheduler(
     logInfo(s"Leasing: Total Memory Access Number is $totalAccessNumber")
     logWarning(s"Leasing: Trace of $jobId is $riTable")
     val numberOfRDDPartitions = rdd.getNumPartitions
-    blockManagerMaster.broadcastDAGInfo(jobId, numberOfRDDPartitions, riTable, totalAccessNumber)
+    blockManagerMaster.broadcastDAGInfo(jobId, numberOfRDDPartitions, riTable.filter( x=> x._2.nonEmpty), totalAccessNumber)
   }
 
 
