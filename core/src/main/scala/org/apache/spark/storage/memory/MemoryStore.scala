@@ -792,151 +792,154 @@ private[spark] class MemoryStore(
       // This is synchronized to ensure that the set of entries is not changed
       // (because of getValue or getBytes) while traversing the iterator, as that
       // can lead to exceptions.
-//      entries.synchronized {
-//        val iterator = entries.entrySet().iterator()
-//        while (freedMemory < space && iterator.hasNext) {
-//          val pair = iterator.next()
-//          val blockId = pair.getKey
-//          val entry = pair.getValue
-//          if (blockIsEvictable(blockId, entry)) {
-//            // We don't want to evict blocks which are currently being read, so we need to obtain
-//            // an exclusive write lock on blocks which are candidates for eviction. We perform a
-//            // non-blocking "tryLock" here in order to ignore blocks which are locked for reading:
-//            if (blockManager.blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
-//              selectedBlocks += blockId
-//              freedMemory += pair.getValue.size
+      entries.synchronized {
+        val iterator = entries.entrySet().iterator()
+        if (rddToAdd.get % 2 ==1) {
+          while (freedMemory < space && iterator.hasNext) {
+            val pair = iterator.next()
+            val blockId = pair.getKey
+            val entry = pair.getValue
+            val rddid = blockId.asRDDId.toString.split("_")(1).toInt
+            if (blockIsEvictable(blockId, entry) && (rddid%2 == 1)) {
+              // We don't want to evict blocks which are currently being read, so we need to obtain
+              // an exclusive write lock on blocks which are candidates for eviction. We perform a
+              // non-blocking "tryLock" here in order to ignore blocks which are locked for reading:
+              if (blockManager.blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
+                selectedBlocks += blockId
+                freedMemory += pair.getValue.size
+              }
+            }
+          }
+        }
+      }
+      ///!!!!!!!!!!!!!!!!!!!!!!!   Above is LRU
+
+//      var freedMemory2 = 0L
+//      val selectedBlocks2 = new ArrayBuffer[BlockId]
+//      var blockToCacheRefCount = Int.MaxValue
+//      // yyh: if this is a broadcast block, cache it anyway
+//      refMap.synchronized {
+//        if (blockId.isDefined && blockId.get.isRDD){
+//          if (refMap.contains(blockId.get))
+//          {
+//            blockToCacheRefCount = refMap(blockId.get)
+//            logInfo(s"LRC: The ref count of $blockId is $blockToCacheRefCount")
+//          }
+//          else {
+//            blockToCacheRefCount = 1
+//            logError(s"LRC: The ref count of $blockId is not in the refMap")
+//          }
+//        }
+//      }
+//
+//      currentRefMap.synchronized {
+//      // Sort all the blocks in current cache by their ref counts
+//      // Only rdd blocks will be put in the currentRefMap
+//      val listMap = ListMap(currentRefMap.toSeq.sortBy(_._2): _*)
+//      breakable {
+//        for ((thisBlockId, thisRefCount) <- listMap){
+//          if (entries.containsKey(thisBlockId) && blockIsEvictable(thisBlockId, entries.get(thisBlockId))) {
+//            if (blockManager.blockInfoManager.lockForWriting(thisBlockId, blocking = false).isDefined) {
+//              if (thisRefCount < blockToCacheRefCount && freedMemory2 < space) {
+//                selectedBlocks2 += thisBlockId
+//                entries.synchronized {
+//                  freedMemory2 += entries.get(thisBlockId).size
+//                }
+//              }
+//              else {
+//                break
+//              }
+//            }
 //            }
 //          }
 //        }
 //      }
-      ///!!!!!!!!!!!!!!!!!!!!!!!   Above is LRU
-
-      var freedMemory2 = 0L
-      val selectedBlocks2 = new ArrayBuffer[BlockId]
-      var blockToCacheRefCount = Int.MaxValue
-      // yyh: if this is a broadcast block, cache it anyway
-      refMap.synchronized {
-        if (blockId.isDefined && blockId.get.isRDD){
-          if (refMap.contains(blockId.get))
-          {
-            blockToCacheRefCount = refMap(blockId.get)
-            logInfo(s"LRC: The ref count of $blockId is $blockToCacheRefCount")
-          }
-          else {
-            blockToCacheRefCount = 1
-            logError(s"LRC: The ref count of $blockId is not in the refMap")
-          }
-        }
-      }
-
-      currentRefMap.synchronized {
-      // Sort all the blocks in current cache by their ref counts
-      // Only rdd blocks will be put in the currentRefMap
-      val listMap = ListMap(currentRefMap.toSeq.sortBy(_._2): _*)
-      breakable {
-        for ((thisBlockId, thisRefCount) <- listMap){
-          if (entries.containsKey(thisBlockId) && blockIsEvictable(thisBlockId, entries.get(thisBlockId))) {
-            if (blockManager.blockInfoManager.lockForWriting(thisBlockId, blocking = false).isDefined) {
-              if (thisRefCount < blockToCacheRefCount && freedMemory2 < space) {
-                selectedBlocks2 += thisBlockId
-                entries.synchronized {
-                  freedMemory2 += entries.get(thisBlockId).size
-                }
-              }
-              else {
-                break
-              }
-            }
-            }
-          }
-        }
-      }
-      logInfo(s"LRC: To evict blocks $selectedBlocks2")
+//      logInfo(s"LRC: To evict blocks $selectedBlocks2")
       //!!!!!!!!!!!!!!!!!!!!!!!!!  ABOVE IS LRC !!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 
-      currentDAGInfoMap.synchronized {
-        val s = entries.asScala
-        if (s.filter(x => x._1.isRDD).filter(x=> blockIsEvictable(x._1, x._2)).isEmpty) {
-          logInfo("Leasing: There is no evictable blocks!!!")
-        }
-        val BlocksDoNotHaveALease =  s
-          .keySet
-          .filter( x => x.isRDD)
-          .filter( x => !currentLease.contains(getRddId(x).getOrElse(0)) )
-        breakable {
-          for (thisblockId <- BlocksDoNotHaveALease) {
-            if (entries.containsKey(thisblockId) && blockIsEvictable(thisblockId, entries.get(thisblockId))) {
-              if (blockManager.blockInfoManager.lockForWriting(thisblockId, blocking = false).isDefined) {
-                if (freedMemory < space) {
-                  selectedBlocks += thisblockId
-                  entries.synchronized {
-                    freedMemory += entries.get(thisblockId).size
-                  }
-                } else {
-                  break
-                }
-              }
-            }
-          }
-        }
-          if (freedMemory < space) {
-            val listmap =ListMap(currentLease.toSeq.sortBy(_._2): _*)
-//            breakable {
-//              for ( (thisrddid, _) <- listmap) {
-//                if (currentDAGInfoMap.contains(thisrddid)) {
+//      currentDAGInfoMap.synchronized {
+//        val s = entries.asScala
+//        if (s.filter(x => x._1.isRDD).filter(x=> blockIsEvictable(x._1, x._2)).isEmpty) {
+//          logInfo("Leasing: There is no evictable blocks!!!")
+//        }
+//        val BlocksDoNotHaveALease =  s
+//          .keySet
+//          .filter( x => x.isRDD)
+//          .filter( x => !currentLease.contains(getRddId(x).getOrElse(0)) )
+//        breakable {
+//          for (thisblockId <- BlocksDoNotHaveALease) {
+//            if (entries.containsKey(thisblockId) && blockIsEvictable(thisblockId, entries.get(thisblockId))) {
+//              if (blockManager.blockInfoManager.lockForWriting(thisblockId, blocking = false).isDefined) {
+//                if (freedMemory < space) {
+//                  selectedBlocks += thisblockId
 //                  entries.synchronized {
-//                    val iterator = entries.entrySet().iterator()
-//                    while (freedMemory < space && iterator.hasNext) {
-//                      val pair = iterator.next()
-//                      val blockId = pair.getKey
-//                      val entry = pair.getValue
-//                      if (blockId.isRDD) {
-//                        val corddid = blockId.asRDDId.toString.split("_")(1).toInt
-//                        if (thisrddid == corddid ) {
-//                          if ( blockIsEvictable(blockId, entry)) {
-//                            if (!selectedBlocks.contains(blockId)) {
-//                              if (blockManager.blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
-//                                selectedBlocks += blockId
-//                                freedMemory += pair.getValue.size
-//                              }
-//                            }
+//                    freedMemory += entries.get(thisblockId).size
+//                  }
+//                } else {
+//                  break
+//                }
+//              }
+//            }
+//          }
+//        }
+//          if (freedMemory < space) {
+//            val listmap =ListMap(currentLease.toSeq.sortBy(_._2): _*)
+////            breakable {
+////              for ( (thisrddid, _) <- listmap) {
+////                if (currentDAGInfoMap.contains(thisrddid)) {
+////                  entries.synchronized {
+////                    val iterator = entries.entrySet().iterator()
+////                    while (freedMemory < space && iterator.hasNext) {
+////                      val pair = iterator.next()
+////                      val blockId = pair.getKey
+////                      val entry = pair.getValue
+////                      if (blockId.isRDD) {
+////                        val corddid = blockId.asRDDId.toString.split("_")(1).toInt
+////                        if (thisrddid == corddid ) {
+////                          if ( blockIsEvictable(blockId, entry)) {
+////                            if (!selectedBlocks.contains(blockId)) {
+////                              if (blockManager.blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
+////                                selectedBlocks += blockId
+////                                freedMemory += pair.getValue.size
+////                              }
+////                            }
+////                          }
+////                        }
+////                      }
+////                    }
+////                  }
+////                  if (freedMemory >= space) {
+////                    break
+////                  }
+////                }
+////              }
+////            }
+//            breakable {
+//              for ((thisRDDId, _) <- listmap) {
+//                if (freedMemory >= space) {
+//                  break
+//                }
+//                breakable {
+//                  for (blockEvict <- s.keySet.filter(x => x.isRDD).filter((x => x.asRDDId.toString.split("_")(1).toInt==thisRDDId))) {
+//                    if (entries.containsKey(blockEvict) && blockIsEvictable(blockEvict, entries.get(blockEvict))) {
+//                      if (blockManager.blockInfoManager.lockForWriting(blockEvict, blocking = false).isDefined) {
+//                        if (currentLease.getOrElse(thisRDDId, 1) <= currentLease.getOrElse(blockEvict.asRDDId.toString.split("_")(1).toInt, 0) && freedMemory < space) {
+//                          selectedBlocks += blockEvict
+//                          entries.synchronized {
+//                            freedMemory += entries.get(blockEvict).size
 //                          }
+//                        } else {
+//                          break
 //                        }
 //                      }
 //                    }
 //                  }
-//                  if (freedMemory >= space) {
-//                    break
-//                  }
 //                }
 //              }
 //            }
-            breakable {
-              for ((thisRDDId, _) <- listmap) {
-                if (freedMemory >= space) {
-                  break
-                }
-                breakable {
-                  for (blockEvict <- s.keySet.filter(x => x.isRDD).filter((x => x.asRDDId.toString.split("_")(1).toInt==thisRDDId))) {
-                    if (entries.containsKey(blockEvict) && blockIsEvictable(blockEvict, entries.get(blockEvict))) {
-                      if (blockManager.blockInfoManager.lockForWriting(blockEvict, blocking = false).isDefined) {
-                        if (currentLease.getOrElse(thisRDDId, 1) <= currentLease.getOrElse(blockEvict.asRDDId.toString.split("_")(1).toInt, 0) && freedMemory < space) {
-                          selectedBlocks += blockEvict
-                          entries.synchronized {
-                            freedMemory += entries.get(blockEvict).size
-                          }
-                        } else {
-                          break
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-      }
+//          }
+//      }
       logWarning(s"Leasing: The to evict block is $selectedBlocks, entries: ${entries.keySet()},the currentLease is $currentLease, the size is $freedMemory")
 
 
