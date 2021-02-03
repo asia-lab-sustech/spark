@@ -790,10 +790,10 @@ class DAGScheduler(
     logInfo("Leasing: profiling " + jobId + "rdd: " + rdd.id + " " + rdd.getStorageLevel.useMemory)
     // val DAGInfoByJob = new mutable.HashMap[Int, HashMap[Int, Int]] // RddId => HashMap(reuseInterval, Frequency)
 
-    val nodeAndChildren = new HashMap[Int, mutable.HashSet[Int]]
-    val nodeAndParents = new HashMap[Int, mutable.HashSet[Int]]
+    val nodeAndChildren = new HashMap[Int, mutable.HashSet[Int]] // rdd  => hasset of children rdd
+    val nodeAndParents = new HashMap[Int, mutable.HashSet[Int]] // rdd => hashset of parenets rdd
     val collectionOfRDDThisJob = new mutable.HashSet[Int]
-    var totalAccessNumber = 0
+    var totalAccessNumber = 0 //
     val samplingNumber = 100
     var newInMemoryRDD = new mutable.HashSet[Int]
 
@@ -816,7 +816,7 @@ class DAGScheduler(
       }
 
       nodeAndParents.put(rdd.id, new mutable.HashSet[Int])
-      for (dep <- rdd.dependencies) {
+      for (dep <- rdd.dependencies) { // here we firstly travourse the DAG to get the information of node -> children
         totalAccessNumber += 1
         logInfo("Leasing: processing depencency between rdd: " + rdd.id + " " + dep.rdd.id)
         nodeAndParents(rdd.id).add(dep.rdd.id)
@@ -857,7 +857,7 @@ class DAGScheduler(
     }
 
 
-    def notRelatedRDD(rdd: Int): Boolean = {
+    def notRelatedRDD(rdd: Int): Boolean = { // if this node do not belong to this stage we count it as not related
       var flag = true
       for (dep <- nodeAndParents.getOrElse(rdd, mutable.HashSet[Int]())) {
         if (collectionOfRDDThisJob.contains(dep) ) {
