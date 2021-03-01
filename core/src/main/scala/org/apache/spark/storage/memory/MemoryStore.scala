@@ -242,10 +242,11 @@ private[spark] class MemoryStore(
       for ( (k,lease) <- currentLease) {
         if ( lease <= 0 ) {
           val selectedToDrop = entries.asScala.keySet.filter(x => x.isRDD).filter(x => x.asRDDId.toString.split("_")(1).toInt== k)
+          logWarning(s"Leasing: The following blocks do not have leases any longer: $selectedToDrop")
           for (blockToDrop <- selectedToDrop) {
             val entry = entries.synchronized { entries.get(blockToDrop) }
             // trying to get the lock
-            if (blockManager.blockInfoManager.lockForWriting(blockToDrop, blocking = false).isDefined) {
+            if (blockManager.blockInfoManager.lockForWriting(blockToDrop).isDefined) {
               // This should never be null as only one task should be dropping
               // blocks and removing entries. However the check is still here for
               // future safety.
