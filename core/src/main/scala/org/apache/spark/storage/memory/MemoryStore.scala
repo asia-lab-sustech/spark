@@ -20,11 +20,11 @@ package org.apache.spark.storage.memory
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.util.{LinkedHashMap, UUID}
-import scala.collection.JavaConverters._
 
+import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-import scala.collection.immutable.{Set, ListMap}
+import scala.collection.immutable.{ListMap, Set}
 import scala.reflect.ClassTag
 import com.google.common.io.ByteStreams
 import org.apache.spark.{SparkConf, TaskContext}
@@ -37,6 +37,7 @@ import org.apache.spark.util.{SizeEstimator, Utils}
 import org.apache.spark.util.collection.SizeTrackingVector
 import org.apache.spark.util.io.{ChunkedByteBuffer, ChunkedByteBufferOutputStream}
 
+import scala.collection.JavaConversions.asScalaSet
 import scala.collection.immutable.ListMap
 import scala.util.control.Breaks.{break, breakable}
 
@@ -208,6 +209,49 @@ private[spark] class MemoryStore(
         currentLease(rddid) = leaseMap.getOrElse(rddid, 0)
       } else {
         currentLease.put(rddid, leaseMap.getOrElse(rddid, 0))
+      }
+    }
+    checkLease()
+  }
+
+
+
+  // Prescriptive caching. Evict every data blocks that do not have lease remaining
+  def checkLease() : Unit = {
+    // Leasing: Drop blocks from memory possibly put the block to the disks
+    def dropBlock[T](blockId: BlockId, entry: MemoryEntry[T]): Unit = {
+      val data = entry match {
+        case DeserializedMemoryEntry(values, _, _) => Left(values)
+        case SerializedMemoryEntry(buffer, _, _) => Right(buffer)
+      }
+      val newEffectiveStorageLevel =
+        blockEvictionHandler.dropFromMemory(blockId, () => data)(entry.classTag)
+      if (newEffectiveStorageLevel.isValid) {
+        // The block is still present in at least one store, so release the lock
+        // but don't delete the block info
+        blockManager.blockInfoManager.unlock(blockId)
+      } else {
+        // The block isn't present in any store, so delete the block info so that the
+        // block can be stored again
+        blockManager.blockInfoManager.removeBlock(blockId)
+      }
+    }
+
+    logWarning(s"Leasing: Will evict all datablocks that do not have lease remaining")
+    entries.synchronized {
+      for ( (k,lease) <- currentLease) {
+        if ( lease <= 0 ) {
+          val selectedToDrop = entries.keySet().filter( p => p.asRDDId.toString.split("_")(1).toInt == k)
+          for (blockId <- selectedToDrop) {
+            val entry = entries.synchronized { entries.get(blockId) }
+            // This should never be null as only one task should be dropping
+            // blocks and removing entries. However the check is still here for
+            // future safety.
+            if (entry != null) {
+              dropBlock(blockId, entry)
+            }
+          }
+        }
       }
     }
   }
