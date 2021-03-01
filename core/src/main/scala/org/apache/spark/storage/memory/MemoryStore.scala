@@ -241,14 +241,17 @@ private[spark] class MemoryStore(
     entries.synchronized {
       for ( (k,lease) <- currentLease) {
         if ( lease <= 0 ) {
-          val selectedToDrop = entries.asScala.keySet.filter( p => p.asRDDId.toString.split("_")(1).toInt == k)
-          for (blockId <- selectedToDrop) {
-            val entry = entries.synchronized { entries.get(blockId) }
-            // This should never be null as only one task should be dropping
-            // blocks and removing entries. However the check is still here for
-            // future safety.
-            if (entry != null) {
-              dropBlock(blockId, entry)
+          val selectedToDrop = entries.asScala.keySet.filter(x => x.isRDD).filter(x => x.asRDDId.toString.split("_")(1).toInt== k)
+          for (blockToDrop <- selectedToDrop) {
+            val entry = entries.synchronized { entries.get(blockToDrop) }
+            // trying to get the lock
+            if (blockManager.blockInfoManager.lockForWriting(blockToDrop, blocking = false).isDefined) {
+              // This should never be null as only one task should be dropping
+              // blocks and removing entries. However the check is still here for
+              // future safety.
+              if (entry != null) {
+                dropBlock(blockToDrop, entry)
+              }
             }
           }
         }
@@ -962,7 +965,7 @@ private[spark] class MemoryStore(
                   break
                 }
                 breakable {
-                  for (blockEvict <- s.keySet.filter(x => x.isRDD).filter((x => x.asRDDId.toString.split("_")(1).toInt==thisRDDId))) {
+                  for (blockEvict <- s.keySet.filter(x => x.isRDD).filter(x => x.asRDDId.toString.split("_")(1).toInt==thisRDDId)) {
                     if (entries.containsKey(blockEvict) && blockIsEvictable(blockEvict, entries.get(blockEvict))) {
                       if (blockManager.blockInfoManager.lockForWriting(blockEvict, blocking = false).isDefined) {
                         if (currentLease.getOrElse(thisRDDId, 1) <= currentLease.getOrElse(blockEvict.asRDDId.toString.split("_")(1).toInt, 0) && freedMemory < space) {
