@@ -241,7 +241,7 @@ private[spark] class MemoryStore(
     entries.synchronized {
       for ( (k,lease) <- currentLease) {
         if ( lease <= 0 ) {
-          val selectedToDrop = entries.keySet().filter( p => p.asRDDId.toString.split("_")(1).toInt == k)
+          val selectedToDrop = entries.asScala.keySet.filter( p => p.asRDDId.toString.split("_")(1).toInt == k)
           for (blockId <- selectedToDrop) {
             val entry = entries.synchronized { entries.get(blockId) }
             // This should never be null as only one task should be dropping
