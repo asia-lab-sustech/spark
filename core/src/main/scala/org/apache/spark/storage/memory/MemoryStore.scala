@@ -246,8 +246,8 @@ private[spark] class MemoryStore(
         val pair = iterator.next()
         val blockId = pair.getKey
         val entry = pair.getValue
-        val rddid = blockId.asRDDId.toString.split("_")(1).toInt
         if (blockId.isRDD) {
+          val rddid = blockId.asRDDId.toString.split("_")(1).toInt
           if (blockManager.blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
             if (currentLease.getOrElse(rddid, -1) <= 0)
             selectedBlocks += blockId
