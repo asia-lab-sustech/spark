@@ -238,25 +238,38 @@ private[spark] class MemoryStore(
     }
 
     logWarning(s"Leasing: Will evict all datablocks that do not have lease remaining")
+    val selectedBlocks = new ArrayBuffer[BlockId]
+    var freeMem = 0L
     entries.synchronized {
-      for ( (k,lease) <- currentLease) {
-        if ( lease <= 0 ) {
-          val selectedToDrop = entries.asScala.keySet.filter(x => x.isRDD).filter(x => x.asRDDId.toString.split("_")(1).toInt== k)
-          logWarning(s"Leasing: The following blocks do not have leases any longer: $selectedToDrop")
-          for (blockToDrop <- selectedToDrop) {
-            val entry = entries.synchronized { entries.get(blockToDrop) }
-            // trying to get the lock
-            if (blockManager.blockInfoManager.lockForWriting(blockToDrop).isDefined) {
-              // This should never be null as only one task should be dropping
-              // blocks and removing entries. However the check is still here for
-              // future safety.
-              if (entry != null) {
-                dropBlock(blockToDrop, entry)
-              }
-            }
+      val iterator = entries.entrySet().iterator()
+      while (iterator.hasNext) {
+        val pair = iterator.next()
+        val blockId = pair.getKey
+        val entry = pair.getValue
+        val rddid = blockId.asRDDId.toString.split("_")(1).toInt
+        if (blockId.isRDD) {
+          if (blockManager.blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
+            if (currentLease.getOrElse(rddid, -1) <= 0)
+            selectedBlocks += blockId
+            freeMem += pair.getValue.size
           }
         }
       }
+    }
+
+    if (selectedBlocks.nonEmpty) {
+      logWarning(s" $selectedBlocks will be dropped to disks because they do not have lease, we have $freeMem more memory")
+      for (blockId <- selectedBlocks) {
+        val entry = entries.synchronized{ entries.get(blockId)}
+        if (entry != null ) {
+          dropBlock(blockId, entry)
+        }
+      }
+      logWarning(s"After dropping ${selectedBlocks.size} blocks, " +
+        s"free memory is ${Utils.bytesToString(maxMemory - blocksMemoryUsed)}")
+    }
+    else {
+      selectedBlocks.foreach( id => blockManager.blockInfoManager.unlock(id))
     }
   }
 
